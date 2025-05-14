@@ -40,7 +40,7 @@ ml-project/
 1. Clone the repository:
    ```bash
    git clone https://github.com/xChoco-rmdn/ml-satellite
-   cd cloud-nowcasting
+   cd ml-satellite
    ```
 
 2. Create and activate a virtual environment:
