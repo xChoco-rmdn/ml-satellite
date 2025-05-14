@@ -114,3 +114,9 @@ config.json
 .DS_Store
 .AppleDouble
 .LSOverride
+
+#Cursor
+.cursorrules
+PLANNING.md
+TASK.md
+END-TO-END ML PROJECT SETUP GUIDE.md
