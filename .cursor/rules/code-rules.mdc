@@ -1,0 +1,102 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+
+# 🤖 AI Assistant Code Generation Guidelines
+
+## 🧠 Core Principles
+1. **Augmentation, Not Replacement**
+   - AI is a collaborative tool to enhance human creativity and productivity
+   - Never generate complete systems without human oversight
+   - Prioritize code quality, readability, and maintainability
+
+2. **Ethical and Responsible Coding**
+   - Respect intellectual property and licensing
+   - Avoid generating code that could be harmful or unethical
+   - Prioritize security and performance best practices
+
+## 📋 Prompt and Context Management
+- **Always Clarify Before Generating**
+  - Ask specific questions if project requirements are unclear
+  - Request additional context when needed
+  - Confirm understanding before code generation
+
+- **Context Awareness**
+  - Review existing project documentation (`PLANNING.md`, `TASK.md`)
+  - Understand project-specific conventions and architecture
+  - Maintain consistency with existing codebase
+
+## 🏗️ Code Generation Standards
+### Structural Guidelines
+- **Modularity and Separation of Concerns**
+  - Break complex logic into smaller, focused functions
+  - Follow SOLID principles
+  - Avoid monolithic code blocks
+
+- **File and Module Management**
+  - Limit file length to 500 lines maximum
+  - Use clear, descriptive naming conventions
+  - Organize code into logical, feature-based modules
+
+### Quality Assurance
+- **Comprehensive Testing**
+  - Generate unit tests for each new function/module
+  - Cover expected use cases, edge cases, and potential failure scenarios
+  - Aim for high test coverage and meaningful assertions
+
+- **Documentation**
+  - Write clear, concise docstrings using Google or NumPy style
+  - Include function purpose, parameters, return values, and potential exceptions
+  - Add inline comments for complex logic explaining the "why"
+
+## 🛠️ Technical Constraints
+### Language and Framework Specifics
+- **Python-First Approach**
+  - Prefer Python as primary language
+  - Follow PEP8 style guidelines
+  - Use type hints consistently
+  - Format code using `black`
+
+- **Recommended Tools and Libraries**
+  - Data Validation: `pydantic`
+  - APIs: `FastAPI`
+  - ORM: `SQLAlchemy` or `SQLModel`
+  - Testing: `pytest`
+
+### Code Generation Boundaries
+- **Avoid Hallucination**
+  - Only use verified, existing libraries
+  - Do not invent non-existent modules or functions
+  - Validate external dependencies before integration
+
+## 🔍 Continuous Improvement
+- **Iterative Refinement**
+  - Be open to human feedback and corrections
+  - Suggest improvements and best practices
+  - Adapt to project-specific requirements
+
+## 📝 Logging and Tracking
+- **Transparent Process**
+  - Log code generation attempts
+  - Track changes and rationale
+  - Provide clear version control and change management
+
+## 🚨 Error Handling and Reliability
+- **Robust Error Management**
+  - Implement comprehensive error handling
+  - Use meaningful error messages
+  - Provide graceful degradation strategies
+
+## 💡 Creative Problem Solving
+- **Innovative Solutions**
+  - Suggest alternative implementations
+  - Highlight potential optimizations
+  - Provide context-aware recommendations
+
+## 🔒 Security Considerations
+- **Proactive Security**
+  - Avoid hardcoding sensitive information
+  - Recommend secure coding practices
+  - Be aware of potential vulnerabilities
