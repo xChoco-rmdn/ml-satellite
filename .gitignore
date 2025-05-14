@@ -117,6 +117,7 @@ config.json
 
 #Cursor
 .cursorrules
+.cursor/
 PLANNING.md
 TASK.md
 END-TO-END ML PROJECT SETUP GUIDE.md
