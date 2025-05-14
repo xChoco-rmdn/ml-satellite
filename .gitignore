@@ -1,0 +1,116 @@
+
+```gitignore
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Virtual Environments
+venv/
+env/
+.env/
+.venv/
+ENV/
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Logs
+*.log
+logs/
+
+# Machine Learning Specific
+*.pkl
+*.model
+*.h5
+*.pth
+mlruns/
+wandb/
+
+# Data files (be careful with large datasets)
+*.csv
+*.json
+*.xlsx
+*.parquet
+data/raw/
+data/processed/
+
+# Operating System files
+.DS_Store
+Thumbs.db
+
+# Testing and Coverage
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Environment Variables
+.env
+*.env
+
+# Model Artifacts
+models/
+*.joblib
+*.sav
+
+# Compiled Python files
+*.pyc
+
+# External libraries
+lib/
+include/
+
+# Temporary files
+.tmp/
+tmp/
+
+# Profiling data
+*.prof
+
+# Weights & Biases
+wandb/
+
+# TensorFlow
+*.tfrecord
+
+# PyTorch
+*.pth
+
+# Keras
+*.h5
+
+# scikit-learn
+*.pkl
+
+# Configuration files with potential secrets
+config.yaml
+config.json
+
+# Backup files
+*.bak
+*.gho
+*.ori
+*.orig
+*.tmp
+
+# Miscellaneous
+.DS_Store
+.AppleDouble
+.LSOverride
