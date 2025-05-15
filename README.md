@@ -79,7 +79,7 @@ The project uses a Convolutional LSTM (ConvLSTM) architecture, which combines th
 
 ## Data
 The system uses Himawari-8/9 satellite data, specifically:
-- Infrared channel (~11 μm) for cloud identification
+- Infrared channel (~10.4 μm) band 13 for cloud identification
 - 10-minute temporal resolution
 - Spatial coverage of the NTB region
 
