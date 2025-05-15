@@ -17,5 +17,6 @@ logging.basicConfig(
 # Create a logger object that can be imported by other modules
 logger = logging.getLogger(__name__)
 
+# Test the logger
 # if __name__ == "__main__":
 #     logging.info("Logger is working")
