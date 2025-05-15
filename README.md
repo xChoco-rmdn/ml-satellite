@@ -24,9 +24,8 @@ ml-satellite/
     │   ├── data_generator.py
     │   ├── data_ingestion.py
     │   ├── data_transformations.py
-    │   ├── model.py
     │   ├── model_evaluation.py
-    │   └── model_trainer.py
+    │   └── model.py
     ├── pipeline/        # Processing pipelines
     │   ├── predict_pipeline.py
     │   └── train_pipeline.py
