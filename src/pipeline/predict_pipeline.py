@@ -1,94 +1,109 @@
 import os
 import sys
 import numpy as np
+import tensorflow as tf
 from src.logger import logger
 from src.exception import CustomException
 from src.utils import load_object
-from tensorflow.keras.models import load_model
-from src.components.data_ingestion import DataIngestion
-from src.components.data_transformations import DataTransformation
-from datetime import datetime, timedelta
 
 class PredictionPipeline:
     def __init__(self):
-        self.model_path = os.path.join('models', 'saved_models', 'final_model.h5')
-        self.data_ingestion = DataIngestion()
-        self.data_transformation = DataTransformation()
-        
-    def load_model(self):
+        try:
+            logger.info("Initializing prediction pipeline")
+            self.model = tf.keras.models.load_model('artifacts/final_model.h5')
+            self.data_transformer = load_object('artifacts/data_transformer.pkl')
+            logger.info("Model and transformer loaded successfully")
+        except Exception as e:
+            logger.error("Error initializing prediction pipeline")
+            raise CustomException(e, sys)
+    
+    def transform_input(self, input_sequence):
         """
-        Load the trained model
+        Transform input sequence for prediction
+        Args:
+            input_sequence: numpy array of shape (time_steps, height, width)
+        Returns:
+            transformed_sequence: numpy array ready for model input
         """
         try:
-            if not os.path.exists(self.model_path):
-                raise CustomException(f"Model file not found at {self.model_path}", sys)
-                
-            model = load_model(self.model_path)
-            return model
+            # Add channel dimension if needed
+            if len(input_sequence.shape) == 3:
+                input_sequence = np.expand_dims(input_sequence, axis=-1)
+            
+            # Add batch dimension if needed
+            if len(input_sequence.shape) == 4:
+                input_sequence = np.expand_dims(input_sequence, axis=0)
+            
+            return input_sequence
             
         except Exception as e:
+            logger.error("Error in transforming input")
             raise CustomException(e, sys)
-            
-    def predict(self, current_time=None, region=None):
+    
+    def inverse_transform_output(self, model_output):
         """
-        Make predictions for the next 4 hours
+        Transform model output back to original scale
+        Args:
+            model_output: numpy array of model predictions
+        Returns:
+            original_scale_output: numpy array in original scale
         """
         try:
-            logger.info("Starting prediction pipeline")
+            # Remove batch dimension if present
+            if len(model_output.shape) == 5:
+                model_output = model_output[0]
             
-            # Set default time if not provided
-            if current_time is None:
-                current_time = datetime.now()
-                
-            # Get the last 6 hours of data for sequence input
-            start_time = current_time - timedelta(hours=6)
+            # Remove channel dimension if present
+            if model_output.shape[-1] == 1:
+                model_output = model_output[..., 0]
             
-            # Get satellite data
-            satellite_files = self.data_ingestion.get_himawari_data(
-                start_time=start_time,
-                end_time=current_time,
-                region=region
-            )
-            
-            if not satellite_files:
-                raise CustomException("No satellite data files found for prediction", sys)
-                
-            # Process the data
-            raw_data_path = self.data_ingestion.initiate_data_ingestion(satellite_files)
-            
-            # Transform the data
-            data = np.load(raw_data_path)
-            normalized_data, _ = self.data_transformation.normalize_data(data)
-            
-            # Prepare sequence for prediction
-            sequence = normalized_data[-6:]  # Last 6 frames
-            sequence = np.expand_dims(sequence, axis=0)  # Add batch dimension
-            
-            # Load model and make prediction
-            model = self.load_model()
-            prediction = model.predict(sequence)
-            
-            # Inverse transform the prediction if needed
-            # This would depend on how the data was normalized during training
-            
-            logger.info("Prediction completed successfully")
-            
-            return prediction
+            return model_output
             
         except Exception as e:
-            logger.error("Error in prediction pipeline")
+            logger.error("Error in inverse transforming output")
             raise CustomException(e, sys)
-            
-    def get_prediction_timestamps(self, current_time=None):
+    
+    def predict(self, input_sequence):
         """
-        Get timestamps for the prediction horizon
+        Make predictions using the trained model
+        Args:
+            input_sequence: numpy array of shape (time_steps, height, width)
+        Returns:
+            predictions: numpy array of predictions
         """
-        if current_time is None:
-            current_time = datetime.now()
+        try:
+            # Transform input
+            transformed_input = self.transform_input(input_sequence)
             
-        prediction_times = [
-            current_time + timedelta(hours=i)
-            for i in range(1, 5)  # 4-hour prediction horizon
-        ]
+            # Make prediction
+            logger.info("Making prediction...")
+            prediction = self.model.predict(transformed_input)
+            
+            # Inverse transform
+            final_prediction = self.inverse_transform_output(prediction)
+            
+            logger.info(f"Prediction shape: {final_prediction.shape}")
+            return final_prediction
+            
+        except Exception as e:
+            logger.error("Error in making prediction")
+            raise CustomException(e, sys)
+
+if __name__ == "__main__":
+    try:
+        # Load a sample sequence for testing
+        sample_input = np.load("data/processed/samples/sample_input_sequence.npy")
         
-        return prediction_times 
+        # Initialize predictor
+        predictor = PredictionPipeline()
+        
+        # Make prediction
+        prediction = predictor.predict(sample_input)
+        
+        logger.info("Prediction completed successfully!")
+        logger.info(f"Input shape: {sample_input.shape}")
+        logger.info(f"Output shape: {prediction.shape}")
+        
+    except Exception as e:
+        logger.error(f"Error in prediction test: {str(e)}")
+        raise e

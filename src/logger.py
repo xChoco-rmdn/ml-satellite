@@ -14,8 +14,13 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
-# Create a logger object that can be imported by other modules
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ml_satellite")
+
+# Add console handler to print logs to console as well
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+formatter = logging.Formatter("[ %(asctime)s ] %(name)s - %(levelname)s - %(message)s")
+logger.addHandler(console_handler)
 
 # Test the logger
 # if __name__ == "__main__":
