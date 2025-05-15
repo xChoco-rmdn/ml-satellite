@@ -66,7 +66,7 @@ htmlcov/
 *.env
 
 # Model Artifacts
-.data/
+data/
 models/
 *.joblib
 *.sav
