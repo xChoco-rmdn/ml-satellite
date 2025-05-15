@@ -92,9 +92,6 @@ The model is evaluated using:
 ## Contributing
 Contributions are welcome! Please feel free to submit a Pull Request.
 
-## License
-This project is licensed under the MIT License - see the LICENSE file for details.
-
 ## Acknowledgments
 - Himawari-8/9 satellite data provided by the Japan Meteorological Agency (JMA)
 - SatPy library for satellite data processing
