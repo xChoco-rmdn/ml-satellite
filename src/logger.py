@@ -14,4 +14,8 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
-logger = logging.getLogger("CloudNowcastingLogger") 
+# Create a logger object that can be imported by other modules
+logger = logging.getLogger(__name__)
+
+# if __name__ == "__main__":
+#     logging.info("Logger is working")

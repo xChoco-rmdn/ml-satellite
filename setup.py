@@ -20,23 +20,20 @@ def get_requirements(file_path: str) -> List[str]:
 
 
 setup(
-    name='cloud-nowcasting',
+    name='satellite-nowcasting',
     version='0.1.0',
     author='Rmdn',
     author_email='zulkiflirmdn@gmail.com',
-    description='Cloud Nowcasting Project for NTB Region using Himawari-8/9 Satellite Data',
+    description='Satellite Nowcasting Project for NTB Region using Himawari-8/9 Data',
     long_description=open('README.md').read(),
     long_description_content_type='text/markdown',
     packages=find_packages(),
     install_requires=get_requirements('requirements.txt'),
     classifiers=[
-        'Development Status :: 3 - Alpha',
+        'Development Status :: 1 - Planning',
         'Intended Audience :: Science/Research',
-        'License :: OSI Approved :: MIT License',
-        'Programming Language :: Python :: 3',
         'Programming Language :: Python :: 3.8',
-        'Programming Language :: Python :: 3.9',
-        'Topic :: Scientific/Engineering :: Atmospheric Science',
+        'Topic :: Scientific/Engineering :: Atmospheric Science :: Machine Learning :: Satellite Data',
     ],
     python_requires='>=3.8',
 )
