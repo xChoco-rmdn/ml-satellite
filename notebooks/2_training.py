@@ -64,6 +64,13 @@ def main():
     try:
         logger.info("Starting training pipeline")
         os.makedirs('artifacts', exist_ok=True)
+        
+        # Initialize pipeline
+        trainer = TrainPipeline(batch_size=4)
+        
+        # Setup training strategy first
+        strategy = trainer.setup_training_strategy()
+        
         # Load preprocessed data directly
         logger.info("Loading preprocessed data from data/processed/ ...")
         X_train = np.load('data/processed/X_train.npy')
@@ -82,14 +89,11 @@ def main():
         y_train = y_train[:-val_size]
         logger.info(f"Split: X_train: {X_train.shape}, y_train: {y_train.shape}, X_val: {X_val.shape}, y_val: {y_val.shape}")
 
-        # Initialize pipeline
-        trainer = TrainPipeline(batch_size=4)
-        # Use the pipeline's model_trainer directly
-        strategy = trainer.setup_training_strategy()
+        # Build and compile model within strategy scope
         with strategy.scope():
             model = trainer.model_trainer.build_model()
-        # Compile model
-        model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+            model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+            
         # Callbacks
         callbacks = [
             tf.keras.callbacks.ModelCheckpoint(
@@ -115,6 +119,7 @@ def main():
                 profile_batch='100,120'
             )
         ]
+        
         logger.info("Training model...")
         history = model.fit(
             X_train, y_train,
@@ -123,20 +128,24 @@ def main():
             batch_size=4,
             callbacks=callbacks
         )
+        
         logger.info("Evaluating model on test set...")
         test_metrics = model.evaluate(X_test, y_test, verbose=1)
         metrics = dict(zip(model.metrics_names, test_metrics))
         logger.info("Test Set Metrics:")
         for metric_name, value in metrics.items():
             logger.info(f"{metric_name}: {value:.4f}")
+            
         logger.info("Saving final model...")
         model.save('artifacts/final_model.h5')
         logger.info("Training pipeline completed successfully!")
+        
         plot_training_history(
             history,
             os.path.join('artifacts', f'training_history_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png')
         )
         return metrics, history
+        
     except Exception as e:
         logger.error("Error in training pipeline")
         raise CustomException(e, sys)

@@ -159,20 +159,23 @@ class DataTransformation:
             raise CustomException(e, sys)
     
     def normalize_data(self, data):
-        """Normalize data using z-score normalization."""
+        """Normalize data using z-score normalization with robust handling of NaN values."""
         try:
-            # Handle NaN values before normalization
+            # Replace NaN values with 0 before normalization
             data = np.nan_to_num(data, nan=0.0)
             
-            # Calculate mean and std along spatial dimensions
-            mean = np.mean(data, axis=(1, 2), keepdims=True)
-            std = np.std(data, axis=(1, 2), keepdims=True)
+            # Calculate global statistics for more stable normalization
+            mean = np.mean(data)
+            std = np.std(data)
             
             # Avoid division by zero
             std = np.where(std == 0, 1.0, std)
             
             # Normalize
             normalized_data = (data - mean) / std
+            
+            # Clip extreme values to prevent numerical instability
+            normalized_data = np.clip(normalized_data, -10, 10)
             
             return normalized_data
         except Exception as e:
