@@ -1,5 +1,3 @@
-
-```gitignore
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -30,7 +28,11 @@ ENV/
 
 # Jupyter Notebook
 .ipynb_checkpoints
-*.ipynb
+# Ignore all notebooks except our main workflow notebooks
+notebooks/*.ipynb
+!notebooks/1_preprocessing.ipynb
+!notebooks/2_training.ipynb
+!notebooks/3_prediction_evaluation.ipynb
 
 # Logs
 *.log
