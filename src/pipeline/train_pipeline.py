@@ -19,6 +19,10 @@ class TrainPipeline:
         self.policy = tf.keras.mixed_precision.Policy('mixed_float16')
         tf.keras.mixed_precision.set_global_policy(self.policy)
         
+        # Create necessary directories
+        os.makedirs('artifacts', exist_ok=True)
+        os.makedirs('logs/fit', exist_ok=True)
+        
     def setup_training_strategy(self):
         """Setup distributed training strategy if multiple GPUs are available"""
         try:
@@ -42,14 +46,35 @@ class TrainPipeline:
         except Exception as e:
             logger.error("Error setting up training strategy")
             raise CustomException(e, sys)
+    
+    def validate_data(self, X_train, y_train, X_val, y_val, X_test, y_test):
+        """Validate data shapes and values"""
+        try:
+            # Check shapes
+            assert len(X_train.shape) == 5, f"Expected 5D input, got shape {X_train.shape}"
+            assert len(y_train.shape) == 5, f"Expected 5D target, got shape {y_train.shape}"
+            
+            # Check for NaN values
+            assert not np.isnan(X_train).any(), "NaN values found in training input"
+            assert not np.isnan(y_train).any(), "NaN values found in training target"
+            assert not np.isnan(X_val).any(), "NaN values found in validation input"
+            assert not np.isnan(y_val).any(), "NaN values found in validation target"
+            assert not np.isnan(X_test).any(), "NaN values found in test input"
+            assert not np.isnan(y_test).any(), "NaN values found in test target"
+            
+            # Check value ranges
+            assert X_train.min() >= 0 and X_train.max() <= 1, "Training input values outside [0,1] range"
+            assert y_train.min() >= 0 and y_train.max() <= 1, "Training target values outside [0,1] range"
+            
+            logger.info("Data validation passed successfully")
+            
+        except AssertionError as e:
+            logger.error(f"Data validation failed: {str(e)}")
+            raise CustomException(e, sys)
         
     def initiate_training(self):
         try:
             logger.info("Starting training pipeline")
-            
-            # Create necessary directories
-            os.makedirs('artifacts', exist_ok=True)
-            os.makedirs('logs/fit', exist_ok=True)
             
             # Load training and test data
             logger.info("Loading data...")
@@ -74,6 +99,9 @@ class TrainPipeline:
             X_train = X_train[:-val_size]
             y_train = y_train[:-val_size]
             
+            # Validate data
+            self.validate_data(X_train, y_train, X_val, y_val, X_test, y_test)
+            
             logger.info(f"Final data shapes:")
             logger.info(f"X_train: {X_train.shape}, y_train: {y_train.shape}")
             logger.info(f"X_val: {X_val.shape}, y_val: {y_val.shape}")
@@ -86,17 +114,20 @@ class TrainPipeline:
             train_generator = SatelliteDataGenerator(
                 X_train, y_train,
                 batch_size=self.batch_size,
-                prefetch_factor=2
+                prefetch_factor=2,
+                augment=True
             )
             val_generator = SatelliteDataGenerator(
                 X_val, y_val,
                 batch_size=self.batch_size,
-                prefetch_factor=2
+                prefetch_factor=2,
+                augment=False
             )
             test_generator = SatelliteDataGenerator(
                 X_test, y_test,
                 batch_size=self.batch_size,
-                prefetch_factor=2
+                prefetch_factor=2,
+                augment=False
             )
             
             # Build and compile model within strategy scope
@@ -105,9 +136,12 @@ class TrainPipeline:
                 model = self.model_trainer.build_model()
                 
                 # Use mixed precision optimizer
-                optimizer = tf.keras.optimizers.Adam(
-                    learning_rate=self.model_trainer.config.learning_rate,
-                    epsilon=1e-4  # Increased epsilon for mixed precision training
+                optimizer = tf.keras.optimizers.AdamW(
+                    learning_rate=1e-4,
+                    weight_decay=1e-5,
+                    beta_1=0.9,
+                    beta_2=0.999,
+                    epsilon=1e-7
                 )
                 optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
                 
