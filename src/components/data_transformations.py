@@ -129,15 +129,25 @@ class DataTransformation:
                 if not np.any(mask):
                     continue
                 
-                # Use inpainting to fill NaN values
-                frame_uint8 = ((frame - frame.min()) * (255.0 / (frame.max() - frame.min()))).astype(np.uint8)
+                # Check if frame has any variation
+                frame_range = frame.max() - frame.min()
+                if frame_range == 0:
+                    # If all values are the same, use that value for inpainting
+                    frame_uint8 = np.full_like(frame, 128, dtype=np.uint8)
+                else:
+                    # Normalize to [0, 255] range
+                    frame_uint8 = ((frame - frame.min()) * (255.0 / frame_range)).astype(np.uint8)
+                
                 mask_uint8 = mask.astype(np.uint8)
                 
                 # Apply inpainting
                 filled_frame = cv2.inpaint(frame_uint8, mask_uint8, 3, cv2.INPAINT_TELEA)
                 
                 # Convert back to original scale
-                filled_frame = (filled_frame.astype(float) * (frame.max() - frame.min()) / 255.0) + frame.min()
+                if frame_range == 0:
+                    filled_frame = np.full_like(filled_frame, frame[0, 0], dtype=float)
+                else:
+                    filled_frame = (filled_frame.astype(float) * frame_range / 255.0) + frame.min()
                 
                 # Update the data
                 data[t] = np.where(mask, filled_frame, frame)
