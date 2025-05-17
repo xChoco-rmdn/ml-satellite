@@ -11,7 +11,7 @@ import tensorflow as tf
 import logging
 
 class TrainPipeline:
-    def __init__(self, batch_size=2):
+    def __init__(self, batch_size=1):  # Reduced default batch size
         # Set environment variables to suppress TensorFlow logging
         os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # FATAL only
         os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -29,6 +29,11 @@ class TrainPipeline:
             # Configure memory growth for all GPUs before TF initialization
             for gpu in gpus:
                 tf.config.experimental.set_memory_growth(gpu, True)
+                # Set memory limit to 90% of available memory
+                tf.config.set_logical_device_configuration(
+                    gpu,
+                    [tf.config.LogicalDeviceConfiguration(memory_limit=12500)]  # ~12.5GB for T4
+                )
         
         # Configure TensorFlow logging
         tf.get_logger().setLevel('ERROR')
@@ -54,7 +59,9 @@ class TrainPipeline:
         with self.strategy.scope():
             self.data_transform = DataTransformation()
             self.model_trainer = CloudNowcastingModel()
-            self.batch_size = batch_size * self.strategy.num_replicas_in_sync
+            # Scale batch size based on number of GPUs but keep it small
+            self.batch_size = min(batch_size * self.strategy.num_replicas_in_sync, 4)
+            logger.info(f"Using batch size of {self.batch_size} across {self.strategy.num_replicas_in_sync} GPUs")
             
             # Enable mixed precision training
             self.policy = tf.keras.mixed_precision.Policy('mixed_float16')
@@ -145,33 +152,36 @@ class TrainPipeline:
                 # Create optimized data generators with distributed strategy
                 train_generator = SatelliteDataGenerator(
                     X_train, y_train,
-                    batch_size=self.batch_size // self.strategy.num_replicas_in_sync,
-                    prefetch_factor=2,
+                    batch_size=max(1, self.batch_size // self.strategy.num_replicas_in_sync),
+                    prefetch_factor=1,  # Reduced prefetch factor
                     augment=True
                 )
                 val_generator = SatelliteDataGenerator(
                     X_val, y_val,
-                    batch_size=self.batch_size // self.strategy.num_replicas_in_sync,
-                    prefetch_factor=2,
+                    batch_size=max(1, self.batch_size // self.strategy.num_replicas_in_sync),
+                    prefetch_factor=1,
                     augment=False
                 )
                 test_generator = SatelliteDataGenerator(
                     X_test, y_test,
-                    batch_size=self.batch_size // self.strategy.num_replicas_in_sync,
-                    prefetch_factor=2,
+                    batch_size=max(1, self.batch_size // self.strategy.num_replicas_in_sync),
+                    prefetch_factor=1,
                     augment=False
                 )
                 
                 # Build and compile model within strategy scope
                 model = self.model_trainer.build_model()
                 
+                # Use a more memory-efficient optimizer
                 optimizer = tf.keras.optimizers.AdamW(
                     learning_rate=1e-4,
                     weight_decay=1e-5,
                     beta_1=0.9,
                     beta_2=0.999,
                     epsilon=1e-7,
-                    clipnorm=1.0
+                    clipnorm=1.0,
+                    # Enable gradient accumulation
+                    gradient_accumulation_steps=4
                 )
                 optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
                 
@@ -179,7 +189,7 @@ class TrainPipeline:
                     optimizer=optimizer,
                     loss='mse',
                     metrics=['mae'],
-                    jit_compile=True
+                    jit_compile=False  # Disable XLA compilation to save memory
                 )
             
             # Create callbacks
@@ -204,29 +214,30 @@ class TrainPipeline:
                     min_lr=1e-6,
                     verbose=0
                 ),
-                # Add TensorBoard callback for monitoring
+                # Add memory monitoring callback
                 tf.keras.callbacks.TensorBoard(
                     log_dir='logs/fit',
                     histogram_freq=1,
-                    write_graph=True,
-                    write_images=True,
+                    write_graph=False,  # Disable graph writing to save memory
+                    write_images=False,  # Disable image writing to save memory
                     update_freq='epoch',
-                    profile_batch='500,520'
+                    profile_batch=0  # Disable profiling to save memory
                 )
             ]
             
-            # Custom callback for GPU monitoring
-            class GPUMonitorCallback(tf.keras.callbacks.Callback):
+            # Custom callback for memory monitoring
+            class MemoryMonitorCallback(tf.keras.callbacks.Callback):
                 def on_epoch_begin(self, epoch, logs=None):
                     if epoch == 0:
-                        logger.info("GPU Usage at start of training:")
+                        logger.info("GPU Memory Usage at start of training:")
                         for gpu in tf.config.list_physical_devices('GPU'):
                             logger.info(f"GPU: {gpu.name}")
+                            try:
+                                tf.config.experimental.get_memory_info(gpu.name)
+                            except:
+                                pass
             
-            callbacks.append(GPUMonitorCallback())
-            
-            # Enable TensorFlow performance optimizations
-            tf.config.optimizer.set_jit(True)
+            callbacks.append(MemoryMonitorCallback())
             
             # Train model with distributed strategy
             logger.info("Starting model training...")
@@ -235,9 +246,9 @@ class TrainPipeline:
                 validation_data=val_generator,
                 epochs=50,
                 callbacks=callbacks,
-                workers=self.strategy.num_replicas_in_sync,  # Use number of GPUs as workers
-                use_multiprocessing=True,  # Enable multiprocessing for data loading
-                verbose=1  # Show progress bar
+                workers=1,  # Reduced workers
+                use_multiprocessing=False,  # Disable multiprocessing to save memory
+                verbose=1
             )
             
             # Evaluate on test set
