@@ -121,9 +121,8 @@ class DataTransformation:
             # Validation and logging
             nan_count = np.isnan(cleaned).sum()
             inf_count = np.isinf(cleaned).sum()
-            logger.info(f"After clean_data: shape={cleaned.shape}, nan_count={nan_count}, inf_count={inf_count}, min={np.nanmin(cleaned):.4f}, max={np.nanmax(cleaned):.4f}")
             if nan_count > 0 or inf_count > 0:
-                logger.warning("NaNs or Infs remain after clean_data. They will be handled in normalization.")
+                logger.warning(f"Data cleaning issues - shape={cleaned.shape}, nan_count={nan_count}, inf_count={inf_count}, min={np.nanmin(cleaned):.4f}, max={np.nanmax(cleaned):.4f}")
             return cleaned
         except Exception as e:
             logger.error("Error in cleaning data")
@@ -138,7 +137,8 @@ class DataTransformation:
             nan_mask = np.isnan(data)
             if not np.any(nan_mask):
                 return data
-            logger.info(f"_interpolate_remaining_nans: nan_count before={np.isnan(data).sum()}")
+                
+            nan_count_before = np.isnan(data).sum()
             for t in range(data.shape[0]):
                 frame = data[t]
                 mask = nan_mask[t]
@@ -166,10 +166,11 @@ class DataTransformation:
                 else:
                     filled_frame = (filled_frame.astype(float) * frame_range / 255.0) + frame_min
                 data[t] = np.where(mask, filled_frame, frame)
-            nan_count = np.isnan(data).sum()
-            inf_count = np.isinf(data).sum()
-            logger.info(f"_interpolate_remaining_nans: nan_count after={nan_count}, inf_count after={inf_count}")
-            if nan_count > 0:
+            
+            nan_count_after = np.isnan(data).sum()
+            inf_count_after = np.isinf(data).sum()
+            if nan_count_after > 0 or inf_count_after > 0:
+                logger.warning(f"Interpolation issues - nan_count: {nan_count_before} -> {nan_count_after}, inf_count: {inf_count_after}")
                 data = np.nan_to_num(data, nan=0.0)
             return data
         except Exception as e:
@@ -179,7 +180,11 @@ class DataTransformation:
     def normalize_data(self, data):
         """Normalize data using per-pixel z-score normalization with robust handling for all-NaN and zero-std pixels."""
         try:
-            logger.info(f"normalize_data: initial nan_count={np.isnan(data).sum()}, inf_count={np.isinf(data).sum()}")
+            nan_count = np.isnan(data).sum()
+            inf_count = np.isinf(data).sum()
+            if nan_count > 0 or inf_count > 0:
+                logger.warning(f"Normalization input issues - nan_count={nan_count}, inf_count={inf_count}")
+                
             global_mean = np.nanmean(data)
             if len(data.shape) == 3:
                 all_nan_mask = np.all(np.isnan(data), axis=0, keepdims=True)
@@ -191,28 +196,33 @@ class DataTransformation:
                 data = np.where(all_nan_mask, global_mean, data)
                 pixel_means = np.nanmean(data, axis=1, keepdims=True)
                 data = np.where(np.isnan(data), pixel_means, data)
+                
             if len(data.shape) == 3:
                 mean = np.mean(data, axis=0, keepdims=True)
                 std = np.std(data, axis=0, keepdims=True)
             else:
                 mean = np.mean(data, axis=1, keepdims=True)
                 std = np.std(data, axis=1, keepdims=True)
+                
             std = np.where(std < 1e-6, 1.0, std)
-            logger.info(f"normalize_data: mean range=({mean.min():.4f}, {mean.max():.4f}), std range=({std.min():.4f}, {std.max():.4f})")
+            
+            # log statistics if there are potential issues
+            if std.min() < 1e-6 or std.max() > 100:
+                logger.warning(f"Normalization stats - mean range=({mean.min():.4f}, {mean.max():.4f}), std range=({std.min():.4f}, {std.max():.4f})")
+                
             normalized_data = (data - mean) / std
             clip_threshold = 3.0
             normalized_data = np.clip(normalized_data, -clip_threshold, clip_threshold)
+            
             nan_count = np.isnan(normalized_data).sum()
             inf_count = np.isinf(normalized_data).sum()
-            logger.info(f"normalize_data: nan_count after normalization={nan_count}, inf_count={inf_count}")
             if nan_count > 0 or inf_count > 0:
-                logger.warning("NaN or inf values detected after normalization, replacing with 0")
+                logger.warning(f"Normalization output issues - nan_count={nan_count}, inf_count={inf_count}")
                 normalized_data = np.nan_to_num(normalized_data, nan=0.0, posinf=0.0, neginf=0.0)
-            nan_count = np.isnan(normalized_data).sum()
-            inf_count = np.isinf(normalized_data).sum()
-            logger.info(f"normalize_data: nan_count after nan_to_num={nan_count}, inf_count={inf_count}")
-            if nan_count > 0 or inf_count > 0:
+                
+            if np.isnan(normalized_data).any() or np.isinf(normalized_data).any():
                 raise CustomException("Normalization failed: NaN or inf values remain in the data", sys)
+                
             return normalized_data
         except Exception as e:
             logger.error(f"Error in per-pixel normalization: {str(e)}")
