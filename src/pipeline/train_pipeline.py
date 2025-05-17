@@ -23,13 +23,15 @@ class TrainPipeline:
         os.makedirs('artifacts', exist_ok=True)
         os.makedirs('logs/fit', exist_ok=True)
         
-        # Configure GPU memory growth
+        # Configure GPU memory growth and reduce logging
         gpus = tf.config.list_physical_devices('GPU')
         if gpus:
             try:
                 for gpu in gpus:
                     tf.config.experimental.set_memory_growth(gpu, True)
-                logger.info(f"Found {len(gpus)} GPU(s), memory growth enabled")
+                # Disable TensorFlow logging
+                tf.get_logger().setLevel('ERROR')
+                os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
             except RuntimeError as e:
                 logger.warning(f"Memory growth setting failed: {str(e)}")
         
@@ -172,24 +174,27 @@ class TrainPipeline:
                     save_best_only=True,
                     monitor='val_loss',
                     save_weights_only=True,
-                    verbose=0  # Disable checkpoint logging
+                    verbose=0
                 ),
                 tf.keras.callbacks.EarlyStopping(
                     patience=10,
                     monitor='val_loss',
                     restore_best_weights=True,
-                    verbose=0  # Disable early stopping logging
+                    verbose=0
                 ),
                 tf.keras.callbacks.ReduceLROnPlateau(
                     factor=0.5,
                     patience=5,
                     monitor='val_loss',
                     min_lr=1e-6,
-                    verbose=0  # Disable LR reduction logging
+                    verbose=0
                 ),
+                # Simplified TensorBoard callback
                 tf.keras.callbacks.TensorBoard(
                     log_dir='logs/fit',
                     histogram_freq=0,
+                    write_graph=False,
+                    write_images=False,
                     update_freq='epoch',
                     profile_batch=0
                 )
@@ -207,14 +212,14 @@ class TrainPipeline:
                 callbacks=callbacks,
                 workers=1,
                 use_multiprocessing=False,
-                verbose=1  # Keep basic progress bar
+                verbose=1
             )
             
             # Evaluate on test set
             logger.info("Evaluating model...")
             test_metrics = model.evaluate(
                 test_generator,
-                verbose=0  # Disable evaluation progress
+                verbose=0
             )
             metrics = dict(zip(model.metrics_names, test_metrics))
             
