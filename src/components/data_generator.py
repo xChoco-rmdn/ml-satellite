@@ -3,6 +3,7 @@ import numpy as np
 from src.logger import logger
 from src.exception import CustomException
 import sys
+import scipy.ndimage
 
 class SatelliteDataGenerator(tf.keras.utils.Sequence):
     def __init__(self, X, y, batch_size=4, prefetch_factor=2, augment=True):
@@ -32,11 +33,15 @@ class SatelliteDataGenerator(tf.keras.utils.Sequence):
             self.height_shift_range = 0.1
             self.brightness_range = [0.8, 1.2]
             
-            logger.info(f"Initialized SatelliteDataGenerator with {self.n_samples} samples")
-            logger.info(f"Batch size: {self.batch_size}, Number of batches: {self.n_batches}")
+            # Convert data to float32 to reduce memory usage
+            self.X = self.X.astype(np.float32)
+            self.y = self.y.astype(np.float32)
+            
+            # Log initialization info once
+            logger.info(f"Data generator initialized - samples: {self.n_samples}, batch_size: {self.batch_size}")
             
         except Exception as e:
-            logger.error("Error initializing SatelliteDataGenerator")
+            logger.error("Error initializing data generator")
             raise CustomException(e, sys)
     
     def __len__(self):
@@ -51,8 +56,8 @@ class SatelliteDataGenerator(tf.keras.utils.Sequence):
             end_idx = min((idx + 1) * self.batch_size, self.n_samples)
             
             # Get batch data
-            batch_X = self.X[start_idx:end_idx]
-            batch_y = self.y[start_idx:end_idx]
+            batch_X = self.X[start_idx:end_idx].copy()  # Create a copy to avoid memory issues
+            batch_y = self.y[start_idx:end_idx].copy()
             
             # Apply augmentation if enabled
             if self.augment:
@@ -61,7 +66,7 @@ class SatelliteDataGenerator(tf.keras.utils.Sequence):
             return batch_X, batch_y
             
         except Exception as e:
-            logger.error(f"Error getting batch {idx}")
+            logger.error(f"Error in batch {idx}")
             raise CustomException(e, sys)
     
     def _augment_batch(self, X, y):
@@ -71,29 +76,35 @@ class SatelliteDataGenerator(tf.keras.utils.Sequence):
             augmented_y = []
             
             for i in range(len(X)):
-                # Get single sample
-                x = X[i]
-                y_sample = y[i]
+                # Original data
+                augmented_X.append(X[i])
+                augmented_y.append(y[i])
                 
                 # Random rotation
                 angle = np.random.uniform(-self.rotation_range, self.rotation_range)
-                x = tf.image.rot90(x, k=int(angle/90))
-                y_sample = tf.image.rot90(y_sample, k=int(angle/90))
+                rotated_X = scipy.ndimage.rotate(X[i], angle, axes=(1, 2), reshape=False)
+                rotated_y = scipy.ndimage.rotate(y[i], angle, axes=(1, 2), reshape=False)
+                augmented_X.append(rotated_X)
+                augmented_y.append(rotated_y)
                 
-                # Random shifts
-                shift_x = int(np.random.uniform(-self.width_shift_range, self.width_shift_range) * x.shape[1])
-                shift_y = int(np.random.uniform(-self.height_shift_range, self.height_shift_range) * x.shape[0])
-                x = tf.image.translate(x, [shift_x, shift_y])
-                y_sample = tf.image.translate(y_sample, [shift_x, shift_y])
+                # Random flip
+                if np.random.random() > 0.5:
+                    flipped_X = np.flip(X[i], axis=1)
+                    flipped_y = np.flip(y[i], axis=1)
+                    augmented_X.append(flipped_X)
+                    augmented_y.append(flipped_y)
                 
-                # Random brightness
-                brightness = np.random.uniform(self.brightness_range[0], self.brightness_range[1])
-                x = x * brightness
-                
-                augmented_X.append(x)
-                augmented_y.append(y_sample)
+                # Random brightness adjustment
+                brightness_factor = np.random.uniform(*self.brightness_range)
+                brightened_X = X[i] * brightness_factor
+                augmented_X.append(brightened_X)
+                augmented_y.append(y[i])
             
-            return np.array(augmented_X), np.array(augmented_y)
+            # Convert to numpy arrays and ensure float32
+            augmented_X = np.array(augmented_X, dtype=np.float32)
+            augmented_y = np.array(augmented_y, dtype=np.float32)
+            
+            return augmented_X, augmented_y
             
         except Exception as e:
             logger.error("Error in data augmentation")

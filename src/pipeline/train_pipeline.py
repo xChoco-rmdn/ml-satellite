@@ -10,7 +10,7 @@ from src.utils import save_object, evaluate_model
 import tensorflow as tf
 
 class TrainPipeline:
-    def __init__(self, batch_size=4):
+    def __init__(self, batch_size=2):
         self.data_transform = DataTransformation()
         self.model_trainer = CloudNowcastingModel()
         self.batch_size = batch_size
@@ -22,6 +22,16 @@ class TrainPipeline:
         # Create necessary directories
         os.makedirs('artifacts', exist_ok=True)
         os.makedirs('logs/fit', exist_ok=True)
+        
+        # Configure GPU memory growth
+        gpus = tf.config.list_physical_devices('GPU')
+        if gpus:
+            try:
+                for gpu in gpus:
+                    tf.config.experimental.set_memory_growth(gpu, True)
+                logger.info(f"Found {len(gpus)} GPU(s), memory growth enabled")
+            except RuntimeError as e:
+                logger.warning(f"Memory growth setting failed: {str(e)}")
         
     def setup_training_strategy(self):
         """Setup distributed training strategy if multiple GPUs are available"""
@@ -88,15 +98,10 @@ class TrainPipeline:
             logger.info("Starting training pipeline")
             
             # Load training and test data
-            logger.info("Loading data...")
             train_data = np.load("data/train/train_data_20250401_0000_to_20250425_0100.npy")
             test_data = np.load("data/test/test_data_20250425_0110_to_20250501_0000.npy")
             
-            logger.info(f"Training data shape: {train_data.shape}")
-            logger.info(f"Test data shape: {test_data.shape}")
-            
             # Transform data
-            logger.info("Transforming data...")
             (X_train, y_train), (X_test, y_test) = self.data_transform.initiate_data_transformation(
                 train_data, test_data
             )
@@ -113,117 +118,118 @@ class TrainPipeline:
             # Validate data
             self.validate_data(X_train, y_train, X_val, y_val, X_test, y_test)
             
-            logger.info(f"Final data shapes:")
-            logger.info(f"X_train: {X_train.shape}, y_train: {y_train.shape}")
-            logger.info(f"X_val: {X_val.shape}, y_val: {y_val.shape}")
-            logger.info(f"X_test: {X_test.shape}, y_test: {y_test.shape}")
+            # Log data shapes once
+            logger.info(f"Data shapes - Train: {X_train.shape}, Val: {X_val.shape}, Test: {X_test.shape}")
             
             # Setup training strategy
             strategy = self.setup_training_strategy()
             
-            # Create optimized data generators with prefetching
+            # Create optimized data generators
             train_generator = SatelliteDataGenerator(
                 X_train, y_train,
                 batch_size=self.batch_size,
-                prefetch_factor=2,
+                prefetch_factor=1,
                 augment=True
             )
             val_generator = SatelliteDataGenerator(
                 X_val, y_val,
                 batch_size=self.batch_size,
-                prefetch_factor=2,
+                prefetch_factor=1,
                 augment=False
             )
             test_generator = SatelliteDataGenerator(
                 X_test, y_test,
                 batch_size=self.batch_size,
-                prefetch_factor=2,
+                prefetch_factor=1,
                 augment=False
             )
             
             # Build and compile model within strategy scope
             with strategy.scope():
-                logger.info("Building model...")
                 model = self.model_trainer.build_model()
                 
-                # Use mixed precision optimizer
                 optimizer = tf.keras.optimizers.AdamW(
                     learning_rate=1e-4,
                     weight_decay=1e-5,
                     beta_1=0.9,
                     beta_2=0.999,
-                    epsilon=1e-7
+                    epsilon=1e-7,
+                    clipnorm=1.0
                 )
                 optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
                 
                 model.compile(
                     optimizer=optimizer,
                     loss='mse',
-                    metrics=['mae']
+                    metrics=['mae'],
+                    jit_compile=True
                 )
             
-            # Create callbacks with reduced logging frequency
+            # Create callbacks with minimal logging
             callbacks = [
                 tf.keras.callbacks.ModelCheckpoint(
                     'artifacts/best_model.h5',
                     save_best_only=True,
-                    monitor='val_loss'
+                    monitor='val_loss',
+                    save_weights_only=True,
+                    verbose=0  # Disable checkpoint logging
                 ),
                 tf.keras.callbacks.EarlyStopping(
                     patience=10,
                     monitor='val_loss',
-                    restore_best_weights=True
+                    restore_best_weights=True,
+                    verbose=0  # Disable early stopping logging
                 ),
                 tf.keras.callbacks.ReduceLROnPlateau(
                     factor=0.5,
                     patience=5,
                     monitor='val_loss',
-                    min_lr=1e-6
+                    min_lr=1e-6,
+                    verbose=0  # Disable LR reduction logging
                 ),
                 tf.keras.callbacks.TensorBoard(
                     log_dir='logs/fit',
-                    histogram_freq=1,
+                    histogram_freq=0,
                     update_freq='epoch',
-                    profile_batch='100,120'  # Profile performance for 20 batches
+                    profile_batch=0
                 )
             ]
             
             # Enable TensorFlow performance optimizations
-            tf.config.optimizer.set_jit(True)  # Enable XLA
+            tf.config.optimizer.set_jit(True)
             
-            # Train model with optimized settings
-            logger.info("Training model...")
+            # Train model with minimal logging
+            logger.info("Starting model training...")
             history = model.fit(
                 train_generator,
                 validation_data=val_generator,
                 epochs=50,
-                callbacks=callbacks
+                callbacks=callbacks,
+                workers=1,
+                use_multiprocessing=False,
+                verbose=1  # Keep basic progress bar
             )
             
             # Evaluate on test set
-            logger.info("Evaluating model on test set...")
+            logger.info("Evaluating model...")
             test_metrics = model.evaluate(
                 test_generator,
-                verbose=1
+                verbose=0  # Disable evaluation progress
             )
             metrics = dict(zip(model.metrics_names, test_metrics))
             
-            logger.info("Test Set Metrics:")
-            for metric_name, value in metrics.items():
-                logger.info(f"{metric_name}: {value:.4f}")
+            # Log final metrics in a single line
+            metrics_str = ", ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
+            logger.info(f"Final metrics - {metrics_str}")
             
-            # Save the final model
-            logger.info("Saving final model...")
+            # Save model and transformer
             model.save('artifacts/final_model.h5')
-            
-            # Save the data transformer for inference
-            logger.info("Saving data transformer...")
             save_object(
                 file_path='artifacts/data_transformer.pkl',
                 obj=self.data_transform
             )
             
-            logger.info("Training pipeline completed successfully!")
+            logger.info("Training completed successfully!")
             return metrics, history
             
         except Exception as e:
@@ -231,15 +237,5 @@ class TrainPipeline:
             raise CustomException(e, sys)
 
 if __name__ == "__main__":
-    # Set memory growth for GPU if available
-    gpus = tf.config.list_physical_devices('GPU')
-    if gpus:
-        try:
-            for gpu in gpus:
-                tf.config.experimental.set_memory_growth(gpu, True)
-            logger.info(f"Found {len(gpus)} GPU(s), memory growth enabled")
-        except RuntimeError as e:
-            logger.warning(f"Memory growth setting failed: {str(e)}")
-    
     trainer = TrainPipeline(batch_size=4)  # Reduced batch size for memory efficiency
     metrics, history = trainer.initiate_training()
