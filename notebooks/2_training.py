@@ -79,12 +79,27 @@ def main():
         os.makedirs('artifacts', exist_ok=True)
         
         # Configure distributed training
-        strategy = tf.distribute.MirroredStrategy()
+        gpus = tf.config.list_physical_devices('GPU')
+        if gpus:
+            strategy = tf.distribute.MirroredStrategy()
+            logger.info(f'Using MirroredStrategy with {len(gpus)} GPU(s)')
+        else:
+            strategy = tf.distribute.get_strategy()
+            logger.info('No GPUs found, using default strategy (CPU)')
+        
         logger.info(f'Number of devices: {strategy.num_replicas_in_sync}')
         
         # Calculate global batch size
-        BATCH_SIZE_PER_REPLICA = 4
-        GLOBAL_BATCH_SIZE = BATCH_SIZE_PER_REPLICA * strategy.num_replicas_in_sync
+        gpus = tf.config.list_physical_devices('GPU')
+        if gpus:
+            BATCH_SIZE_PER_REPLICA = 4
+            GLOBAL_BATCH_SIZE = BATCH_SIZE_PER_REPLICA * strategy.num_replicas_in_sync
+            logger.info(f'Using GPU batch size: {GLOBAL_BATCH_SIZE}')
+        else:
+            # Smaller batch size for CPU training
+            BATCH_SIZE_PER_REPLICA = 2
+            GLOBAL_BATCH_SIZE = BATCH_SIZE_PER_REPLICA
+            logger.info(f'Using CPU batch size: {GLOBAL_BATCH_SIZE}')
         
         try:
             with strategy.scope():
