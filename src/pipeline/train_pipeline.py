@@ -33,13 +33,24 @@ class TrainPipeline:
                 # Use MirroredStrategy for multi-GPU training
                 strategy = tf.distribute.MirroredStrategy()
                 logger.info(f"Using MirroredStrategy with {len(gpus)} GPUs")
+            elif len(gpus) == 1:
+                # Use OneDeviceStrategy for single GPU
+                strategy = tf.distribute.OneDeviceStrategy(f"/GPU:0")
+                logger.info("Using single GPU")
             else:
-                # Use default strategy for single GPU or CPU
+                # Use default strategy for CPU
                 strategy = tf.distribute.get_strategy()
+                logger.info("Using CPU")
+            
+            # Configure strategy
+            with strategy.scope():
+                # Enable mixed precision
+                tf.keras.mixed_precision.set_global_policy('mixed_float16')
+                
+                # Configure memory growth
                 if gpus:
-                    logger.info("Using single GPU")
-                else:
-                    logger.info("Using CPU")
+                    for gpu in gpus:
+                        tf.config.experimental.set_memory_growth(gpu, True)
             
             return strategy
             

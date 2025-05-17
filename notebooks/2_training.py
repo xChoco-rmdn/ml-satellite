@@ -151,14 +151,33 @@ def main():
         raise CustomException(e, sys)
 
 if __name__ == "__main__":
-    # Set memory growth for GPU if available
-    gpus = tf.config.list_physical_devices('GPU')
-    if gpus:
-        try:
-            for gpu in gpus:
-                tf.config.experimental.set_memory_growth(gpu, True)
-            logger.info(f"Found {len(gpus)} GPU(s), memory growth enabled")
-        except RuntimeError as e:
-            logger.warning(f"Memory growth setting failed: {str(e)}")
+    # Configure GPU memory growth and prevent plugin registration warnings
+    try:
+        # Disable TensorFlow logging for plugin registration
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+        
+        # Configure GPU memory growth
+        gpus = tf.config.list_physical_devices('GPU')
+        if gpus:
+            try:
+                # Set memory growth for all GPUs
+                for gpu in gpus:
+                    tf.config.experimental.set_memory_growth(gpu, True)
+                logger.info(f"Found {len(gpus)} GPU(s), memory growth enabled")
+                
+                # Set visible devices to use all available GPUs
+                tf.config.set_visible_devices(gpus, 'GPU')
+                
+                # Verify GPU is being used
+                logger.info("GPU devices configured:")
+                for gpu in gpus:
+                    logger.info(f"  - {gpu.name}")
+            except RuntimeError as e:
+                logger.warning(f"GPU configuration failed: {str(e)}")
+        else:
+            logger.warning("No GPU devices found, using CPU")
+            
+    except Exception as e:
+        logger.error(f"Error configuring GPU: {str(e)}")
     
     main() 

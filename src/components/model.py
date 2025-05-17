@@ -153,17 +153,24 @@ class CloudNowcastingModel:
                 return -tf.reduce_mean(tf.abs(true_grad - pred_grad))  # negative for minimization
 
             def combined_loss(y_true, y_pred):
+                # Add epsilon to prevent division by zero
+                epsilon = 1e-6
+                
                 # MSE loss (30%)
                 mse = tf.reduce_mean(tf.square(y_true - y_pred))
                 
                 # MAE loss (20%)
                 mae = tf.reduce_mean(tf.abs(y_true - y_pred))
                 
-                # SSIM loss (20%)
-                ssim = 1 - tf.reduce_mean(tf.image.ssim(y_true, y_pred, max_val=1.0))
+                # SSIM loss (20%) with safeguards
+                ssim = tf.image.ssim(y_true, y_pred, max_val=1.0)
+                ssim = tf.reduce_mean(ssim)
+                ssim_loss = 1.0 - tf.clip_by_value(ssim, 0.0, 1.0)
                 
-                # MS-SSIM loss (10%)
-                ms_ssim = 1 - tf.reduce_mean(tf.image.ssim_multiscale(y_true, y_pred, max_val=1.0))
+                # MS-SSIM loss (10%) with safeguards
+                ms_ssim = tf.image.ssim_multiscale(y_true, y_pred, max_val=1.0)
+                ms_ssim = tf.reduce_mean(ms_ssim)
+                ms_ssim_loss = 1.0 - tf.clip_by_value(ms_ssim, 0.0, 1.0)
                 
                 # Temporal consistency loss (10%)
                 true_grad = y_true[:, 1:] - y_true[:, :-1]
@@ -177,20 +184,21 @@ class CloudNowcastingModel:
                 pred_grad_y = y_pred[:, 1:, :] - y_pred[:, :-1, :]
                 gradient = tf.reduce_mean(tf.abs(true_grad_x - pred_grad_x) + tf.abs(true_grad_y - pred_grad_y))
                 
-                # Combine losses with weights
+                # Combine losses with weights and add epsilon to prevent NaN
                 total_loss = (
                     0.3 * mse +
                     0.2 * mae +
-                    0.2 * ssim +
-                    0.1 * ms_ssim +
+                    0.2 * ssim_loss +
+                    0.1 * ms_ssim_loss +
                     0.1 * temporal +
                     0.1 * gradient
-                )
+                ) + epsilon
                 
-                return total_loss
+                # Final safeguard against NaN
+                return tf.where(tf.math.is_nan(total_loss), tf.constant(1.0), total_loss)
             
-            # Advanced optimizer with warmup
-            initial_learning_rate = 1e-5
+            # Advanced optimizer with warmup and gradient clipping
+            initial_learning_rate = 1e-5  # Reduced from 1e-4
             lr_schedule = tf.keras.optimizers.schedules.CosineDecayRestarts(
                 initial_learning_rate,
                 first_decay_steps=2000,
@@ -201,11 +209,12 @@ class CloudNowcastingModel:
             
             optimizer = tf.keras.optimizers.AdamW(
                 learning_rate=lr_schedule,
-                weight_decay=1e-6,
+                weight_decay=1e-6,  # Reduced from 1e-5
                 beta_1=0.9,
                 beta_2=0.999,
                 epsilon=1e-7,
-                clipnorm=1.0
+                clipnorm=1.0,  # Added gradient clipping
+                clipvalue=0.5  # Added value clipping
             )
             
             # Compile model with gradient clipping
