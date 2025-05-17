@@ -213,8 +213,7 @@ class CloudNowcastingModel:
                 beta_1=0.9,
                 beta_2=0.999,
                 epsilon=1e-7,
-                clipnorm=1.0,  # Added gradient clipping
-                clipvalue=0.5  # Added value clipping
+                clipnorm=1.0  # Using only clipnorm for gradient clipping
             )
             
             # Compile model with gradient clipping
