@@ -1,21 +1,17 @@
 """
-Satellite Image Training Script
+Satellite Image Training Script with Distributed Training
 
-This script handles the model training process including:
-- Model architecture definition
-- Training loop implementation
-- Hyperparameter tuning
-- Model checkpointing
-- Training visualization
+This script implements distributed training across multiple GPUs using TensorFlow's
+MirroredStrategy for satellite nowcasting with ConvLSTM.
 
 Usage:
     python 2_training.py
 
 The script will:
-1. Load preprocessed data
-2. Initialize and train the model
-3. Save the trained model to artifacts/
-4. Generate training visualizations
+1. Detect available GPUs and set up distributed training
+2. Load and preprocess data
+3. Train the model across GPUs
+4. Save checkpoints and visualizations
 """
 
 import os
@@ -69,137 +65,129 @@ def plot_training_history(history, save_path):
     plt.savefig(save_path)
     plt.close()
 
+def create_distributed_dataset(X, y, batch_size, strategy):
+    """Create a distributed dataset for training"""
+    dataset = tf.data.Dataset.from_tensor_slices((X, y))
+    dataset = dataset.shuffle(buffer_size=1000)
+    dataset = dataset.batch(batch_size)
+    dataset = dataset.prefetch(tf.data.AUTOTUNE)
+    return strategy.experimental_distribute_dataset(dataset)
+
 def main():
     try:
-        logger.info("Starting training pipeline")
+        logger.info("Starting distributed training pipeline")
         os.makedirs('artifacts', exist_ok=True)
         
-        # Initialize pipeline with smaller batch size to reduce memory usage
-        trainer = TrainPipeline(batch_size=2)  # Reduced batch size
+        # Configure distributed training
+        strategy = tf.distribute.MirroredStrategy()
+        logger.info(f'Number of devices: {strategy.num_replicas_in_sync}')
         
-        # Load preprocessed data in chunks to reduce memory usage
-        logger.info("Loading preprocessed data...")
-        X_train = np.load('data/processed/X_train.npy', mmap_mode='r')  # Memory-mapped loading
-        y_train = np.load('data/processed/y_train.npy', mmap_mode='r')
-        X_test = np.load('data/processed/X_test.npy', mmap_mode='r')
-        y_test = np.load('data/processed/y_test.npy', mmap_mode='r')
+        # Calculate global batch size
+        BATCH_SIZE_PER_REPLICA = 4
+        GLOBAL_BATCH_SIZE = BATCH_SIZE_PER_REPLICA * strategy.num_replicas_in_sync
         
-        # Create validation split from training data
-        val_split = 0.1
-        val_size = int(len(X_train) * val_split)
-        X_val = X_train[-val_size:]
-        y_val = y_train[-val_size:]
-        X_train = X_train[:-val_size]
-        y_train = y_train[:-val_size]
-        
-        logger.info(f"Split data shapes:")
-        logger.info(f"X_train: {X_train.shape}, y_train: {y_train.shape}")
-        logger.info(f"X_val: {X_val.shape}, y_val: {y_val.shape}")
-        logger.info(f"X_test: {X_test.shape}, y_test: {y_test.shape}")
+        with strategy.scope():
+            # Initialize pipeline with distributed batch size
+            trainer = TrainPipeline(batch_size=GLOBAL_BATCH_SIZE)
+            
+            # Load preprocessed data
+            logger.info("Loading preprocessed data...")
+            X_train = np.load('data/train/X_train.npy', mmap_mode='r')
+            y_train = np.load('data/train/y_train.npy', mmap_mode='r')
+            X_test = np.load('data/test/X_test.npy', mmap_mode='r')
+            y_test = np.load('data/test/y_test.npy', mmap_mode='r')
+            
+            # Create validation split
+            val_split = 0.1
+            val_size = int(len(X_train) * val_split)
+            X_val = X_train[-val_size:]
+            y_val = y_train[-val_size:]
+            X_train = X_train[:-val_size]
+            y_train = y_train[:-val_size]
+            
+            logger.info(f"Split data shapes:")
+            logger.info(f"X_train: {X_train.shape}, y_train: {y_train.shape}")
+            logger.info(f"X_val: {X_val.shape}, y_val: {y_val.shape}")
+            logger.info(f"X_test: {X_test.shape}, y_test: {y_test.shape}")
 
-        # Enable mixed precision training
-        policy = tf.keras.mixed_precision.Policy('mixed_float16')
-        tf.keras.mixed_precision.set_global_policy(policy)
-        
-        # Build and compile model
-        logger.info("Building model...")
-        model = trainer.model_trainer.build_model()
-        
-        # Optimizer with reduced memory footprint
-        optimizer = tf.keras.optimizers.AdamW(
-            learning_rate=1e-6,
-            weight_decay=1e-7,
-            beta_1=0.9,
-            beta_2=0.999,
-            epsilon=1e-7,
-            clipnorm=1.0
-        )
-        
-        # First compile without XLA to warm up
-        logger.info("Warming up model...")
-        model.compile(
-            optimizer=optimizer,
-            loss='mse',
-            metrics=['mae'],
-            jit_compile=False  # Disable XLA for warmup
-        )
-        
-        # Warm up the model with a small batch
-        warmup_batch = X_train[:2]  # Reduced warmup batch size
-        warmup_target = y_train[:2]
-        model.fit(
-            warmup_batch,
-            warmup_target,
-            epochs=1,
-            verbose=0
-        )
-        
-        # Recompile with XLA enabled
-        logger.info("Recompiling model with XLA...")
-        model.compile(
-            optimizer=optimizer,
-            loss='mse',
-            metrics=['mae'],
-            jit_compile=True  # Enable XLA after warmup
-        )
+            # Enable mixed precision training
+            policy = tf.keras.mixed_precision.Policy('mixed_float16')
+            tf.keras.mixed_precision.set_global_policy(policy)
             
-        # Simplified callbacks to reduce memory overhead
-        callbacks = [
-            tf.keras.callbacks.ModelCheckpoint(
-                'artifacts/best_model.h5',
-                save_best_only=True,
-                monitor='val_loss',
-                mode='min'
-            ),
-            tf.keras.callbacks.EarlyStopping(
-                patience=20,
-                monitor='val_loss',
-                restore_best_weights=True
-            ),
-            tf.keras.callbacks.ReduceLROnPlateau(
-                factor=0.2,
-                patience=10,
-                monitor='val_loss',
-                min_lr=1e-8
+            # Build and compile model
+            logger.info("Building model...")
+            model = trainer.model_trainer.build_model()
+            model.summary()
+            
+            # Create distributed datasets
+            train_dataset = create_distributed_dataset(X_train, y_train, GLOBAL_BATCH_SIZE, strategy)
+            val_dataset = create_distributed_dataset(X_val, y_val, GLOBAL_BATCH_SIZE, strategy)
+            test_dataset = create_distributed_dataset(X_test, y_test, GLOBAL_BATCH_SIZE, strategy)
+            
+            # Callbacks for distributed training
+            callbacks = [
+                tf.keras.callbacks.ModelCheckpoint(
+                    'artifacts/best_model.h5',
+                    save_best_only=True,
+                    monitor='val_loss',
+                    mode='min'
+                ),
+                tf.keras.callbacks.EarlyStopping(
+                    patience=20,
+                    monitor='val_loss',
+                    restore_best_weights=True
+                ),
+                tf.keras.callbacks.ReduceLROnPlateau(
+                    factor=0.2,
+                    patience=10,
+                    monitor='val_loss',
+                    min_lr=1e-8
+                ),
+                # Add TensorBoard callback for monitoring
+                tf.keras.callbacks.TensorBoard(
+                    log_dir='logs/fit',
+                    histogram_freq=1,
+                    write_graph=True,
+                    write_images=True,
+                    update_freq='epoch'
+                )
+            ]
+            
+            # Clear GPU memory
+            tf.keras.backend.clear_session()
+            
+            # Train model with distributed strategy
+            logger.info("Starting distributed model training...")
+            history = model.fit(
+                train_dataset,
+                validation_data=val_dataset,
+                epochs=50,
+                callbacks=callbacks,
+                verbose=1
             )
-        ]
-        
-        # Clear GPU memory before training
-        tf.keras.backend.clear_session()
-        
-        # Train model with memory-efficient settings
-        logger.info("Starting model training...")
-        history = model.fit(
-            X_train, y_train,
-            validation_data=(X_val, y_val),
-            epochs=50,
-            batch_size=2,  # Reduced batch size
-            callbacks=callbacks,
-            verbose=1
-        )
-        
-        # Evaluate on test set
-        logger.info("Evaluating model on test set...")
-        test_metrics = model.evaluate(X_test, y_test, verbose=1)
-        metrics = dict(zip(model.metrics_names, test_metrics))
-        
-        logger.info("Test Set Metrics:")
-        for metric_name, value in metrics.items():
-            logger.info(f"{metric_name}: {value:.4f}")
             
-        # Save final model
-        logger.info("Saving final model...")
-        model.save('artifacts/final_model.h5')
-        
-        # Plot and save training history
-        plot_training_history(
-            history,
-            os.path.join('artifacts', f'training_history_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png')
-        )
-        
-        logger.info("Training pipeline completed successfully!")
-        return metrics, history
-        
+            # Evaluate on test set
+            logger.info("Evaluating model on test set...")
+            test_metrics = model.evaluate(test_dataset, verbose=1)
+            metrics = dict(zip(model.metrics_names, test_metrics))
+            
+            logger.info("Test Set Metrics:")
+            for metric_name, value in metrics.items():
+                logger.info(f"{metric_name}: {value:.4f}")
+                
+            # Save final model
+            logger.info("Saving final model...")
+            model.save('artifacts/final_model.h5')
+            
+            # Plot and save training history
+            plot_training_history(
+                history,
+                os.path.join('artifacts', f'training_history_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png')
+            )
+            
+            logger.info("Distributed training pipeline completed successfully!")
+            return metrics, history
+            
     except Exception as e:
         logger.error(f"Error in training pipeline: {str(e)}")
         raise CustomException(e, sys)

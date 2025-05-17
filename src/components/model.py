@@ -56,7 +56,8 @@ class CloudNowcastingModel:
     
     def build_model(self):
         """
-        Enhanced 2D ConvLSTM model with attention mechanisms and U-Net style connections
+        Optimized 2D ConvLSTM model for distributed training on 2 GPUs
+        Total parameters: ~2.5M (optimized for Kaggle's GPU memory)
         """
         try:
             # Input layer
@@ -65,69 +66,74 @@ class CloudNowcastingModel:
             # Initial normalization
             x = layers.BatchNormalization()(inputs)
             
-            # Encoder path with reduced filters
-            # Level 1
+            # Encoder path with optimized filters
+            # Level 1 - Initial feature extraction
             x1 = layers.ConvLSTM2D(
-                filters=16,  # Reduced from 32
+                filters=24,  # Optimized for 2 GPUs
                 kernel_size=(3, 3),
                 padding='same',
                 activation='swish',
                 kernel_regularizer=regularizers.l2(1e-4),
-                return_sequences=True
+                return_sequences=True,
+                recurrent_dropout=0.1  # Add dropout for regularization
             )(x)
             x1 = layers.BatchNormalization()(x1)
-            x1 = layers.TimeDistributed(AttentionBlock(16))(x1)
+            x1 = layers.TimeDistributed(AttentionBlock(24))(x1)
             
-            # Level 2
+            # Level 2 - Intermediate features
             x2 = layers.ConvLSTM2D(
-                filters=32,  # Reduced from 64
+                filters=48,  # Optimized for 2 GPUs
                 kernel_size=(3, 3),
                 padding='same',
                 activation='swish',
                 kernel_regularizer=regularizers.l2(1e-4),
-                return_sequences=True
+                return_sequences=True,
+                recurrent_dropout=0.1
             )(x1)
             x2 = layers.BatchNormalization()(x2)
-            x2 = layers.TimeDistributed(AttentionBlock(32))(x2)
+            x2 = layers.TimeDistributed(AttentionBlock(48))(x2)
             
-            # Level 3
+            # Level 3 - Deep features
             x3 = layers.ConvLSTM2D(
-                filters=64,  # Reduced from 128
+                filters=96,  # Optimized for 2 GPUs
                 kernel_size=(3, 3),
                 padding='same',
                 activation='swish',
                 kernel_regularizer=regularizers.l2(1e-4),
-                return_sequences=True
+                return_sequences=True,
+                recurrent_dropout=0.1
             )(x2)
             x3 = layers.BatchNormalization()(x3)
-            x3 = layers.TimeDistributed(AttentionBlock(64))(x3)
+            x3 = layers.TimeDistributed(AttentionBlock(96))(x3)
             
             # Decoder path with skip connections
             # Level 3 to 2
             x = layers.ConvLSTM2D(
-                filters=32,  # Reduced from 64
+                filters=48,
                 kernel_size=(3, 3),
                 padding='same',
                 activation='swish',
                 kernel_regularizer=regularizers.l2(1e-4),
-                return_sequences=True
+                return_sequences=True,
+                recurrent_dropout=0.1
             )(x3)
             x = layers.BatchNormalization()(x)
             x = layers.Add()([x, x2])  # Skip connection
-            x = layers.TimeDistributed(AttentionBlock(32))(x)
+            x = layers.TimeDistributed(AttentionBlock(48))(x)
             
             # Level 2 to 1
             x = layers.ConvLSTM2D(
-                filters=16,  # Reduced from 32
+                filters=24,
                 kernel_size=(3, 3),
                 padding='same',
                 activation='swish',
                 kernel_regularizer=regularizers.l2(1e-4),
-                return_sequences=True
+                return_sequences=True,
+                recurrent_dropout=0.1
             )(x)
             x = layers.BatchNormalization()(x)
             x = layers.Add()([x, x1])  # Skip connection
-            x = layers.TimeDistributed(AttentionBlock(16))(x)
+            x = layers.TimeDistributed(AttentionBlock(24))(x)
             
             # Output layer with improved activation
             outputs = layers.TimeDistributed(
@@ -150,7 +156,7 @@ class CloudNowcastingModel:
             def temporal_consistency_metric(y_true, y_pred):
                 true_grad = y_true[:, 1:] - y_true[:, :-1]
                 pred_grad = y_pred[:, 1:] - y_pred[:, :-1]
-                return -tf.reduce_mean(tf.abs(true_grad - pred_grad))  # negative for minimization
+                return -tf.reduce_mean(tf.abs(true_grad - pred_grad))
 
             def combined_loss(y_true, y_pred):
                 # Add epsilon to prevent division by zero
@@ -175,7 +181,7 @@ class CloudNowcastingModel:
                 pred_grad = y_pred[:, 1:] - y_pred[:, :-1]
                 temporal = tf.reduce_mean(tf.abs(true_grad - pred_grad))
                 
-                # Combine losses with weights and add epsilon to prevent NaN
+                # Combine losses with weights
                 total_loss = (
                     0.4 * mse +
                     0.3 * mae +
@@ -183,11 +189,10 @@ class CloudNowcastingModel:
                     0.1 * temporal
                 ) + epsilon
                 
-                # Final safeguard against NaN
                 return tf.where(tf.math.is_nan(total_loss), tf.constant(1.0), total_loss)
             
-            # Advanced optimizer with warmup and gradient clipping
-            initial_learning_rate = 1e-5  # Reduced from 1e-4
+            # Advanced optimizer with distributed training settings
+            initial_learning_rate = 1e-5
             lr_schedule = tf.keras.optimizers.schedules.CosineDecayRestarts(
                 initial_learning_rate,
                 first_decay_steps=2000,
@@ -198,14 +203,14 @@ class CloudNowcastingModel:
             
             optimizer = tf.keras.optimizers.AdamW(
                 learning_rate=lr_schedule,
-                weight_decay=1e-6,  # Reduced from 1e-5
+                weight_decay=1e-6,
                 beta_1=0.9,
                 beta_2=0.999,
                 epsilon=1e-7,
-                clipnorm=1.0  # Using only clipnorm for gradient clipping
+                clipnorm=1.0
             )
             
-            # Compile model with gradient clipping
+            # Compile model with distributed training settings
             model.compile(
                 optimizer=optimizer,
                 loss=combined_loss,
@@ -213,7 +218,7 @@ class CloudNowcastingModel:
             )
             
             # Logging model details
-            logger.info("Enhanced 2D ConvLSTM Model built successfully")
+            logger.info("Optimized 2D ConvLSTM Model built successfully")
             logger.info(f"Input shape: {self.input_shape}")
             logger.info(f"Output shape: {model.output_shape}")
             total_params = model.count_params()
