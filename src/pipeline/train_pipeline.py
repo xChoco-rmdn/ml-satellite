@@ -17,6 +17,19 @@ class TrainPipeline:
         os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
         os.environ['TF_ENABLE_AUTO_MIXED_PRECISION'] = '0'
         
+        # Set GPU environment variables before any TF operations
+        gpus = tf.config.list_physical_devices('GPU')
+        if len(gpus) > 1:
+            # Set environment variables for better multi-GPU performance
+            os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
+            os.environ['TF_GPU_THREAD_COUNT'] = '1'
+            os.environ['TF_USE_CUDNN'] = '1'
+            os.environ['TF_CUDNN_USE_AUTOTUNE'] = '1'
+            
+            # Configure memory growth for all GPUs before TF initialization
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+        
         # Configure TensorFlow logging
         tf.get_logger().setLevel('ERROR')
         tf.autograph.set_verbosity(0)
@@ -34,7 +47,7 @@ class TrainPipeline:
         os.makedirs('artifacts', exist_ok=True)
         os.makedirs('logs/fit', exist_ok=True)
         
-        # Setup distributed training strategy first
+        # Setup distributed training strategy
         self.strategy = self.setup_training_strategy()
         
         # Initialize components within strategy scope
@@ -61,18 +74,6 @@ class TrainPipeline:
                     cross_device_ops=tf.distribute.NcclAllReduce()  # Use NCCL for better GPU communication
                 )
                 logger.info(f"Using MirroredStrategy with {len(gpus)} GPUs: {[gpu.name for gpu in gpus]}")
-                
-                # Configure memory growth for all GPUs
-                for gpu in gpus:
-                    tf.config.experimental.set_memory_growth(gpu, True)
-                    tf.config.set_visible_devices(gpu, 'GPU')
-                
-                # Set environment variables for better multi-GPU performance
-                os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
-                os.environ['TF_GPU_THREAD_COUNT'] = '1'
-                os.environ['TF_USE_CUDNN'] = '1'
-                os.environ['TF_CUDNN_USE_AUTOTUNE'] = '1'
-                
             elif len(gpus) == 1:
                 strategy = tf.distribute.OneDeviceStrategy(f"/GPU:0")
                 logger.info(f"Using single GPU: {gpus[0].name}")
