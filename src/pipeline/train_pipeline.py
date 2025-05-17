@@ -12,10 +12,6 @@ import logging
 
 class TrainPipeline:
     def __init__(self, batch_size=2):
-        self.data_transform = DataTransformation()
-        self.model_trainer = CloudNowcastingModel()
-        self.batch_size = batch_size
-        
         # Set environment variables to suppress TensorFlow logging
         os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # FATAL only
         os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -34,22 +30,22 @@ class TrainPipeline:
         logging.getLogger('tensorflow.python').setLevel(logging.ERROR)
         logging.getLogger('tensorflow.python.ops').setLevel(logging.ERROR)
         
-        # Enable mixed precision training
-        self.policy = tf.keras.mixed_precision.Policy('mixed_float16')
-        tf.keras.mixed_precision.set_global_policy(self.policy)
-        
         # Create necessary directories
         os.makedirs('artifacts', exist_ok=True)
         os.makedirs('logs/fit', exist_ok=True)
         
-        # Configure GPU memory growth
-        gpus = tf.config.list_physical_devices('GPU')
-        if gpus:
-            try:
-                for gpu in gpus:
-                    tf.config.experimental.set_memory_growth(gpu, True)
-            except RuntimeError as e:
-                logger.warning(f"Memory growth setting failed: {str(e)}")
+        # Setup distributed training strategy first
+        self.strategy = self.setup_training_strategy()
+        
+        # Initialize components within strategy scope
+        with self.strategy.scope():
+            self.data_transform = DataTransformation()
+            self.model_trainer = CloudNowcastingModel()
+            self.batch_size = batch_size * self.strategy.num_replicas_in_sync
+            
+            # Enable mixed precision training
+            self.policy = tf.keras.mixed_precision.Policy('mixed_float16')
+            tf.keras.mixed_precision.set_global_policy(self.policy)
         
     def setup_training_strategy(self):
         """Setup distributed training strategy if multiple GPUs are available"""
@@ -66,29 +62,23 @@ class TrainPipeline:
                 )
                 logger.info(f"Using MirroredStrategy with {len(gpus)} GPUs: {[gpu.name for gpu in gpus]}")
                 
-                # Set batch size per GPU
-                self.batch_size = self.batch_size * len(gpus)
-                logger.info(f"Total batch size across {len(gpus)} GPUs: {self.batch_size}")
+                # Configure memory growth for all GPUs
+                for gpu in gpus:
+                    tf.config.experimental.set_memory_growth(gpu, True)
+                    tf.config.set_visible_devices(gpu, 'GPU')
+                
+                # Set environment variables for better multi-GPU performance
+                os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
+                os.environ['TF_GPU_THREAD_COUNT'] = '1'
+                os.environ['TF_USE_CUDNN'] = '1'
+                os.environ['TF_CUDNN_USE_AUTOTUNE'] = '1'
+                
             elif len(gpus) == 1:
-                # Use OneDeviceStrategy for single GPU
                 strategy = tf.distribute.OneDeviceStrategy(f"/GPU:0")
                 logger.info(f"Using single GPU: {gpus[0].name}")
             else:
-                # Use default strategy for CPU
                 strategy = tf.distribute.get_strategy()
                 logger.info("No GPUs found, using CPU")
-            
-            # Configure strategy
-            with strategy.scope():
-                # Enable mixed precision
-                tf.keras.mixed_precision.set_global_policy('mixed_float16')
-                
-                # Configure memory growth for all GPUs
-                if gpus:
-                    for gpu in gpus:
-                        tf.config.experimental.set_memory_growth(gpu, True)
-                        # Set visible devices explicitly
-                        tf.config.set_visible_devices(gpu, 'GPU')
             
             return strategy
             
@@ -125,9 +115,6 @@ class TrainPipeline:
         try:
             logger.info("Starting training pipeline")
             
-            # Setup training strategy first
-            strategy = self.setup_training_strategy()
-            
             # Load training and test data
             train_data = np.load("data/train/train_data_20250401_0000_to_20250425_0100.npy")
             test_data = np.load("data/test/test_data_20250425_0110_to_20250501_0000.npy")
@@ -152,24 +139,24 @@ class TrainPipeline:
             # Log data shapes once
             logger.info(f"Data shapes - Train: {X_train.shape}, Val: {X_val.shape}, Test: {X_test.shape}")
             
-            # Create distributed datasets
-            with strategy.scope():
+            # Create distributed datasets within strategy scope
+            with self.strategy.scope():
                 # Create optimized data generators with distributed strategy
                 train_generator = SatelliteDataGenerator(
                     X_train, y_train,
-                    batch_size=self.batch_size // strategy.num_replicas_in_sync,  # Divide batch size by number of GPUs
+                    batch_size=self.batch_size // self.strategy.num_replicas_in_sync,
                     prefetch_factor=2,
                     augment=True
                 )
                 val_generator = SatelliteDataGenerator(
                     X_val, y_val,
-                    batch_size=self.batch_size // strategy.num_replicas_in_sync,
+                    batch_size=self.batch_size // self.strategy.num_replicas_in_sync,
                     prefetch_factor=2,
                     augment=False
                 )
                 test_generator = SatelliteDataGenerator(
                     X_test, y_test,
-                    batch_size=self.batch_size // strategy.num_replicas_in_sync,
+                    batch_size=self.batch_size // self.strategy.num_replicas_in_sync,
                     prefetch_factor=2,
                     augment=False
                 )
@@ -194,7 +181,7 @@ class TrainPipeline:
                     jit_compile=True
                 )
             
-            # Create minimal callbacks
+            # Create callbacks
             callbacks = [
                 tf.keras.callbacks.ModelCheckpoint(
                     'artifacts/best_model.h5',
@@ -215,30 +202,41 @@ class TrainPipeline:
                     monitor='val_loss',
                     min_lr=1e-6,
                     verbose=0
+                ),
+                # Add TensorBoard callback for monitoring
+                tf.keras.callbacks.TensorBoard(
+                    log_dir='logs/fit',
+                    histogram_freq=1,
+                    write_graph=True,
+                    write_images=True,
+                    update_freq='epoch',
+                    profile_batch='500,520'
                 )
             ]
+            
+            # Custom callback for GPU monitoring
+            class GPUMonitorCallback(tf.keras.callbacks.Callback):
+                def on_epoch_begin(self, epoch, logs=None):
+                    if epoch == 0:
+                        logger.info("GPU Usage at start of training:")
+                        for gpu in tf.config.list_physical_devices('GPU'):
+                            logger.info(f"GPU: {gpu.name}")
+            
+            callbacks.append(GPUMonitorCallback())
             
             # Enable TensorFlow performance optimizations
             tf.config.optimizer.set_jit(True)
             
-            # Custom callback for minimal progress logging
-            class MinimalProgressCallback(tf.keras.callbacks.Callback):
-                def on_epoch_end(self, epoch, logs=None):
-                    if logs:
-                        logger.info(f"Epoch {epoch+1} - loss: {logs['loss']:.4f}, val_loss: {logs['val_loss']:.4f}")
-            
-            callbacks.append(MinimalProgressCallback())
-            
-            # Train model with minimal logging
+            # Train model with distributed strategy
             logger.info("Starting model training...")
             history = model.fit(
                 train_generator,
                 validation_data=val_generator,
                 epochs=50,
                 callbacks=callbacks,
-                workers=1,
-                use_multiprocessing=False,
-                verbose=0  # Disable progress bar
+                workers=self.strategy.num_replicas_in_sync,  # Use number of GPUs as workers
+                use_multiprocessing=True,  # Enable multiprocessing for data loading
+                verbose=1  # Show progress bar
             )
             
             # Evaluate on test set
