@@ -175,15 +175,21 @@ class DataTransformation:
             raise CustomException(e, sys)
     
     def normalize_data(self, data):
-        """Normalize data using z-score normalization with robust handling of NaN values."""
+        """Normalize data using per-pixel z-score normalization."""
         try:
             # Replace NaN values with 0 before normalization
             data = np.nan_to_num(data, nan=0.0)
             
-            # Calculate global statistics for more stable normalization
-            # Use nanmean and nanstd to handle any remaining NaN values
-            mean = np.nanmean(data)
-            std = np.nanstd(data)
+            # Calculate per-pixel statistics
+            # For data shape (time, height, width) or (batch, time, height, width)
+            if len(data.shape) == 3:
+                # Calculate mean and std along time axis for each pixel
+                mean = np.mean(data, axis=0, keepdims=True)
+                std = np.std(data, axis=0, keepdims=True)
+            else:  # (batch, time, height, width)
+                # Calculate mean and std along time axis for each pixel in each batch
+                mean = np.mean(data, axis=1, keepdims=True)
+                std = np.std(data, axis=1, keepdims=True)
             
             # Avoid division by zero and handle extreme cases
             std = np.where(std == 0, 1.0, std)
@@ -198,8 +204,11 @@ class DataTransformation:
             # Final check for any remaining NaN or inf values
             normalized_data = np.nan_to_num(normalized_data, nan=0.0, posinf=10.0, neginf=-10.0)
             
+            logger.info(f"Per-pixel normalization completed. Data range: [{normalized_data.min():.2f}, {normalized_data.max():.2f}]")
             return normalized_data
+            
         except Exception as e:
+            logger.error(f"Error in per-pixel normalization: {str(e)}")
             raise CustomException(e, sys)
     
     def augment_data(self, data, labels):
