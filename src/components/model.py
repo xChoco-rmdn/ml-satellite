@@ -151,14 +151,20 @@ class CloudNowcastingModel:
             
             # Enhanced loss function combining MSE, SSIM, and temporal consistency
             def ssim_metric(y_true, y_pred):
+                y_true = tf.cast(y_true, tf.float32)
+                y_pred = tf.cast(y_pred, tf.float32)
                 return tf.reduce_mean(tf.image.ssim(y_true, y_pred, max_val=1.0))
 
             def temporal_consistency_metric(y_true, y_pred):
+                y_true = tf.cast(y_true, tf.float32)
+                y_pred = tf.cast(y_pred, tf.float32)
                 true_grad = y_true[:, 1:] - y_true[:, :-1]
                 pred_grad = y_pred[:, 1:] - y_pred[:, :-1]
                 return -tf.reduce_mean(tf.abs(true_grad - pred_grad))
 
             def combined_loss(y_true, y_pred):
+                y_true = tf.cast(y_true, tf.float32)
+                y_pred = tf.cast(y_pred, tf.float32)
                 # Add epsilon to prevent division by zero
                 epsilon = 1e-6
                 
