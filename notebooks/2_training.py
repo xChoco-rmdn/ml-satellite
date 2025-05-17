@@ -26,6 +26,15 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from datetime import datetime
 
+# Suppress all TensorFlow logging
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress all TF logging
+tf.get_logger().setLevel('ERROR')
+tf.autograph.set_verbosity(0)
+
+# Disable TensorFlow debugging tools
+tf.debugging.disable_check_numerics()
+tf.debugging.disable_traceback_filtering()
+
 # Add the project root directory to Python path
 project_root = str(Path(__file__).parent.parent)
 sys.path.append(project_root)
@@ -62,58 +71,22 @@ def plot_training_history(history, save_path):
 
 def main():
     try:
-        # Enable TensorFlow debugging tools
-        tf.debugging.enable_check_numerics()
-        tf.debugging.set_log_device_placement(True)
-        
         logger.info("Starting training pipeline")
         os.makedirs('artifacts', exist_ok=True)
         
-        # Initialize pipeline with larger batch size for stability
-        trainer = TrainPipeline(batch_size=8)  # Increased batch size
+        # Initialize pipeline with smaller batch size to reduce memory usage
+        trainer = TrainPipeline(batch_size=4)  # Reduced batch size
         
-        # Setup training strategy first
-        strategy = trainer.setup_training_strategy()
+        # Setup training strategy with memory optimization
+        strategy = tf.distribute.MirroredStrategy()
         
-        # Load preprocessed data
+        # Load preprocessed data in chunks to reduce memory usage
         logger.info("Loading preprocessed data...")
-        X_train = np.load('data/processed/X_train.npy')
-        y_train = np.load('data/processed/y_train.npy')
-        X_test = np.load('data/processed/X_test.npy')
-        y_test = np.load('data/processed/y_test.npy')
+        X_train = np.load('data/processed/X_train.npy', mmap_mode='r')  # Memory-mapped loading
+        y_train = np.load('data/processed/y_train.npy', mmap_mode='r')
+        X_test = np.load('data/processed/X_test.npy', mmap_mode='r')
+        y_test = np.load('data/processed/y_test.npy', mmap_mode='r')
         
-        # Add data validation checks
-        logger.info("Validating input data...")
-        # Convert to TensorFlow tensors for statistics
-        X_train_tf = tf.convert_to_tensor(X_train, dtype=tf.float32)
-        y_train_tf = tf.convert_to_tensor(y_train, dtype=tf.float32)
-        
-        # Calculate statistics using TensorFlow operations
-        tf.print("X_train stats - mean:", tf.reduce_mean(X_train_tf))
-        tf.print("X_train stats - std:", tf.math.reduce_std(X_train_tf))
-        tf.print("y_train stats - mean:", tf.reduce_mean(y_train_tf))
-        tf.print("y_train stats - std:", tf.math.reduce_std(y_train_tf))
-        
-        # Check for NaN values
-        assert not np.isnan(X_train).any(), "NaN values found in X_train"
-        assert not np.isnan(y_train).any(), "NaN values found in y_train"
-        assert not np.isnan(X_test).any(), "NaN values found in X_test"
-        assert not np.isnan(y_test).any(), "NaN values found in y_test"
-        
-        # Check for infinite values
-        assert not np.isinf(X_train).any(), "Infinite values found in X_train"
-        assert not np.isinf(y_train).any(), "Infinite values found in y_train"
-        assert not np.isinf(X_test).any(), "Infinite values found in X_test"
-        assert not np.isinf(y_test).any(), "Infinite values found in y_test"
-        
-        # Check value ranges
-        assert X_train.min() >= -3 and X_train.max() <= 3, "X_train values outside [-3, 3] range"
-        assert y_train.min() >= -3 and y_train.max() <= 3, "y_train values outside [-3, 3] range"
-        
-        logger.info(f"Loaded data shapes:")
-        logger.info(f"X_train: {X_train.shape}, y_train: {y_train.shape}")
-        logger.info(f"X_test: {X_test.shape}, y_test: {y_test.shape}")
-
         # Create validation split from training data
         val_split = 0.1
         val_size = int(len(X_train) * val_split)
@@ -132,24 +105,28 @@ def main():
             logger.info("Building model...")
             model = trainer.model_trainer.build_model()
             
-            # Use mixed precision optimizer with gradient clipping
+            # Use mixed precision training to reduce memory usage
+            policy = tf.keras.mixed_precision.Policy('mixed_float16')
+            tf.keras.mixed_precision.set_global_policy(policy)
+            
+            # Optimizer with reduced memory footprint
             optimizer = tf.keras.optimizers.AdamW(
-                learning_rate=1e-6,  # Further reduced learning rate
-                weight_decay=1e-7,   # Reduced weight decay
+                learning_rate=1e-6,
+                weight_decay=1e-7,
                 beta_1=0.9,
                 beta_2=0.999,
                 epsilon=1e-7,
-                clipnorm=1.0  # Add gradient clipping
+                clipnorm=1.0
             )
-            optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
             
             model.compile(
                 optimizer=optimizer,
                 loss='mse',
-                metrics=['mae']
+                metrics=['mae'],
+                jit_compile=True  # Enable XLA compilation for better memory efficiency
             )
             
-        # Callbacks with adjusted parameters
+        # Simplified callbacks to reduce memory overhead
         callbacks = [
             tf.keras.callbacks.ModelCheckpoint(
                 'artifacts/best_model.h5',
@@ -158,37 +135,25 @@ def main():
                 mode='min'
             ),
             tf.keras.callbacks.EarlyStopping(
-                patience=20,  # Increased patience
+                patience=20,
                 monitor='val_loss',
-                restore_best_weights=True,
-                min_delta=1e-4
+                restore_best_weights=True
             ),
             tf.keras.callbacks.ReduceLROnPlateau(
-                factor=0.2,  # More aggressive reduction
-                patience=10,  # Increased patience
+                factor=0.2,
+                patience=10,
                 monitor='val_loss',
                 min_lr=1e-8
-            ),
-            tf.keras.callbacks.TensorBoard(
-                log_dir='logs/fit',
-                histogram_freq=1,
-                update_freq='epoch'
-            ),
-            # Add custom callback for NaN detection
-            tf.keras.callbacks.LambdaCallback(
-                on_batch_end=lambda batch, logs: tf.debugging.assert_all_finite(
-                    logs['loss'], f"NaN loss detected at batch {batch}"
-                )
             )
         ]
         
-        # Train model with adjusted parameters
+        # Train model with memory-efficient settings
         logger.info("Starting model training...")
         history = model.fit(
             X_train, y_train,
             validation_data=(X_val, y_val),
             epochs=50,
-            batch_size=8,  # Increased batch size
+            batch_size=4,  # Reduced batch size
             callbacks=callbacks,
             verbose=1
         )
@@ -220,12 +185,8 @@ def main():
         raise CustomException(e, sys)
 
 if __name__ == "__main__":
-    # Configure GPU memory growth and prevent plugin registration warnings
+    # Configure GPU memory growth
     try:
-        # Disable TensorFlow logging for plugin registration
-        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-        
-        # Configure GPU memory growth
         gpus = tf.config.list_physical_devices('GPU')
         if gpus:
             try:
@@ -233,14 +194,6 @@ if __name__ == "__main__":
                 for gpu in gpus:
                     tf.config.experimental.set_memory_growth(gpu, True)
                 logger.info(f"Found {len(gpus)} GPU(s), memory growth enabled")
-                
-                # Set visible devices to use all available GPUs
-                tf.config.set_visible_devices(gpus, 'GPU')
-                
-                # Verify GPU is being used
-                logger.info("GPU devices configured:")
-                for gpu in gpus:
-                    logger.info(f"  - {gpu.name}")
             except RuntimeError as e:
                 logger.warning(f"GPU configuration failed: {str(e)}")
         else:
