@@ -15,6 +15,15 @@ class TrainPipeline:
         self.model_trainer = CloudNowcastingModel()
         self.batch_size = batch_size
         
+        # Completely disable TensorFlow logging
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # FATAL only
+        tf.get_logger().setLevel('ERROR')
+        tf.autograph.set_verbosity(0)
+        
+        # Disable TensorFlow debug logs
+        tf.debugging.disable_traceback_filtering()
+        tf.debugging.disable_check_numerics()
+        
         # Enable mixed precision training
         self.policy = tf.keras.mixed_precision.Policy('mixed_float16')
         tf.keras.mixed_precision.set_global_policy(self.policy)
@@ -23,15 +32,12 @@ class TrainPipeline:
         os.makedirs('artifacts', exist_ok=True)
         os.makedirs('logs/fit', exist_ok=True)
         
-        # Configure GPU memory growth and reduce logging
+        # Configure GPU memory growth
         gpus = tf.config.list_physical_devices('GPU')
         if gpus:
             try:
                 for gpu in gpus:
                     tf.config.experimental.set_memory_growth(gpu, True)
-                # Disable TensorFlow logging
-                tf.get_logger().setLevel('ERROR')
-                os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
             except RuntimeError as e:
                 logger.warning(f"Memory growth setting failed: {str(e)}")
         
@@ -167,7 +173,7 @@ class TrainPipeline:
                     jit_compile=True
                 )
             
-            # Create callbacks with minimal logging
+            # Create minimal callbacks
             callbacks = [
                 tf.keras.callbacks.ModelCheckpoint(
                     'artifacts/best_model.h5',
@@ -188,20 +194,19 @@ class TrainPipeline:
                     monitor='val_loss',
                     min_lr=1e-6,
                     verbose=0
-                ),
-                # Simplified TensorBoard callback
-                tf.keras.callbacks.TensorBoard(
-                    log_dir='logs/fit',
-                    histogram_freq=0,
-                    write_graph=False,
-                    write_images=False,
-                    update_freq='epoch',
-                    profile_batch=0
                 )
             ]
             
             # Enable TensorFlow performance optimizations
             tf.config.optimizer.set_jit(True)
+            
+            # Custom callback for minimal progress logging
+            class MinimalProgressCallback(tf.keras.callbacks.Callback):
+                def on_epoch_end(self, epoch, logs=None):
+                    if logs:
+                        logger.info(f"Epoch {epoch+1} - loss: {logs['loss']:.4f}, val_loss: {logs['val_loss']:.4f}")
+            
+            callbacks.append(MinimalProgressCallback())
             
             # Train model with minimal logging
             logger.info("Starting model training...")
@@ -212,7 +217,7 @@ class TrainPipeline:
                 callbacks=callbacks,
                 workers=1,
                 use_multiprocessing=False,
-                verbose=1
+                verbose=0  # Disable progress bar
             )
             
             # Evaluate on test set
