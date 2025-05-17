@@ -56,86 +56,91 @@ class CloudNowcastingModel:
     
     def build_model(self):
         """
-        Optimized 2D ConvLSTM model for distributed training on 2 GPUs
-        Total parameters: ~2.5M (optimized for Kaggle's GPU memory)
+        Memory-optimized 2D ConvLSTM model for distributed training
+        Reduced parameters and memory usage while maintaining performance
         """
         try:
             # Input layer
             inputs = layers.Input(shape=self.input_shape)
             
-            # Initial normalization
-            x = layers.BatchNormalization()(inputs)
+            # Initial normalization with memory-efficient settings
+            x = layers.BatchNormalization(momentum=0.9, epsilon=1e-5)(inputs)
             
             # Encoder path with optimized filters
             # Level 1 - Initial feature extraction
             x1 = layers.ConvLSTM2D(
-                filters=24,  # Optimized for 2 GPUs
+                filters=16,  # Reduced from 24
                 kernel_size=(3, 3),
                 padding='same',
                 activation='swish',
                 kernel_regularizer=regularizers.l2(1e-4),
                 return_sequences=True,
-                recurrent_dropout=0.1  # Add dropout for regularization
+                recurrent_dropout=0.1,
+                unroll=True  # Memory optimization
             )(x)
-            x1 = layers.BatchNormalization()(x1)
-            x1 = layers.TimeDistributed(AttentionBlock(24))(x1)
+            x1 = layers.BatchNormalization(momentum=0.9, epsilon=1e-5)(x1)
+            x1 = layers.TimeDistributed(AttentionBlock(16))(x1)
             
             # Level 2 - Intermediate features
             x2 = layers.ConvLSTM2D(
-                filters=48,  # Optimized for 2 GPUs
+                filters=32,  # Reduced from 48
                 kernel_size=(3, 3),
                 padding='same',
                 activation='swish',
                 kernel_regularizer=regularizers.l2(1e-4),
                 return_sequences=True,
-                recurrent_dropout=0.1
+                recurrent_dropout=0.1,
+                unroll=True
             )(x1)
-            x2 = layers.BatchNormalization()(x2)
-            x2 = layers.TimeDistributed(AttentionBlock(48))(x2)
+            x2 = layers.BatchNormalization(momentum=0.9, epsilon=1e-5)(x2)
+            x2 = layers.TimeDistributed(AttentionBlock(32))(x2)
             
             # Level 3 - Deep features
             x3 = layers.ConvLSTM2D(
-                filters=96,  # Optimized for 2 GPUs
+                filters=64,  # Reduced from 96
                 kernel_size=(3, 3),
                 padding='same',
                 activation='swish',
                 kernel_regularizer=regularizers.l2(1e-4),
                 return_sequences=True,
-                recurrent_dropout=0.1
+                recurrent_dropout=0.1,
+                unroll=True
             )(x2)
-            x3 = layers.BatchNormalization()(x3)
-            x3 = layers.TimeDistributed(AttentionBlock(96))(x3)
+            x3 = layers.BatchNormalization(momentum=0.9, epsilon=1e-5)(x3)
+            x3 = layers.TimeDistributed(AttentionBlock(64))(x3)
             
             # Decoder path with skip connections
             # Level 3 to 2
             x = layers.ConvLSTM2D(
-                filters=48,
+                filters=32,
                 kernel_size=(3, 3),
                 padding='same',
                 activation='swish',
                 kernel_regularizer=regularizers.l2(1e-4),
                 return_sequences=True,
-                recurrent_dropout=0.1
+                recurrent_dropout=0.1,
+                unroll=True
             )(x3)
-            x = layers.BatchNormalization()(x)
+            x = layers.BatchNormalization(momentum=0.9, epsilon=1e-5)(x)
             x = layers.Add()([x, x2])  # Skip connection
-            x = layers.TimeDistributed(AttentionBlock(48))(x)
+            x = layers.TimeDistributed(AttentionBlock(32))(x)
             
             # Level 2 to 1
             x = layers.ConvLSTM2D(
-                filters=24,
+                filters=16,
                 kernel_size=(3, 3),
                 padding='same',
                 activation='swish',
                 kernel_regularizer=regularizers.l2(1e-4),
                 return_sequences=True,
-                recurrent_dropout=0.1
+                recurrent_dropout=0.1,
+                unroll=True
             )(x)
-            x = layers.BatchNormalization()(x)
+            x = layers.BatchNormalization(momentum=0.9, epsilon=1e-5)(x)
             x = layers.Add()([x, x1])  # Skip connection
-            x = layers.TimeDistributed(AttentionBlock(24))(x)
+            x = layers.TimeDistributed(AttentionBlock(16))(x)
             
-            # Output layer with improved activation
+            # Output layer with memory-efficient settings
             outputs = layers.TimeDistributed(
                 layers.Conv2D(
                     filters=1,
@@ -216,15 +221,17 @@ class CloudNowcastingModel:
                 clipnorm=1.0
             )
             
-            # Compile model with distributed training settings
+            # Compile model with memory-efficient settings
             model.compile(
                 optimizer=optimizer,
                 loss=combined_loss,
-                metrics=['mae', ssim_metric, temporal_consistency_metric]
+                metrics=['mae', ssim_metric, temporal_consistency_metric],
+                jit_compile=False,  # Disable XLA
+                run_eagerly=False  # Disable eager execution
             )
             
             # Logging model details
-            logger.info("Optimized 2D ConvLSTM Model built successfully")
+            logger.info("Memory-optimized 2D ConvLSTM Model built successfully")
             logger.info(f"Input shape: {self.input_shape}")
             logger.info(f"Output shape: {model.output_shape}")
             total_params = model.count_params()

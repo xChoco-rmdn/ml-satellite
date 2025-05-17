@@ -11,7 +11,7 @@ import tensorflow as tf
 import logging
 
 class TrainPipeline:
-    def __init__(self, batch_size=1):  # Reduced default batch size
+    def __init__(self, batch_size=1):  # Start with batch size 1
         # Set environment variables to suppress TensorFlow logging
         os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # FATAL only
         os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -60,7 +60,7 @@ class TrainPipeline:
             self.data_transform = DataTransformation()
             self.model_trainer = CloudNowcastingModel()
             # Scale batch size based on number of GPUs but keep it small
-            self.batch_size = min(batch_size * self.strategy.num_replicas_in_sync, 4)
+            self.batch_size = min(batch_size * self.strategy.num_replicas_in_sync, 2)
             logger.info(f"Using batch size of {self.batch_size} across {self.strategy.num_replicas_in_sync} GPUs")
             
             # Enable mixed precision training
@@ -172,109 +172,54 @@ class TrainPipeline:
                 # Build and compile model within strategy scope
                 model = self.model_trainer.build_model()
                 
-                # Use a more memory-efficient optimizer
-                optimizer = tf.keras.optimizers.AdamW(
-                    learning_rate=1e-4,
-                    weight_decay=1e-5,
-                    beta_1=0.9,
-                    beta_2=0.999,
-                    epsilon=1e-7,
-                    clipnorm=1.0,
-                    # Enable gradient accumulation
-                    gradient_accumulation_steps=4
-                )
-                optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
+                # Memory-efficient callbacks
+                callbacks = [
+                    tf.keras.callbacks.ModelCheckpoint(
+                        'best_model.keras',
+                        save_best_only=True,
+                        monitor='val_loss',
+                        mode='min',
+                        save_weights_only=True  # Save only weights to save memory
+                    ),
+                    tf.keras.callbacks.EarlyStopping(
+                        patience=10,
+                        monitor='val_loss',
+                        restore_best_weights=True
+                    ),
+                    tf.keras.callbacks.ReduceLROnPlateau(
+                        factor=0.5,
+                        patience=5,
+                        min_lr=1e-6,
+                        monitor='val_loss'
+                    ),
+                    # Disable TensorBoard to save memory
+                ]
                 
-                model.compile(
-                    optimizer=optimizer,
-                    loss='mse',
-                    metrics=['mae'],
-                    jit_compile=False  # Disable XLA compilation to save memory
+                # Train with memory-efficient settings
+                history = model.fit(
+                    train_generator,
+                    validation_data=val_generator,
+                    epochs=50,  # Reduced epochs
+                    callbacks=callbacks,
+                    verbose=1,
+                    workers=1,  # Single worker to save memory
+                    use_multiprocessing=False  # Disable multiprocessing
                 )
-            
-            # Create callbacks
-            callbacks = [
-                tf.keras.callbacks.ModelCheckpoint(
-                    'artifacts/best_model.h5',
-                    save_best_only=True,
-                    monitor='val_loss',
-                    save_weights_only=True,
-                    verbose=0
-                ),
-                tf.keras.callbacks.EarlyStopping(
-                    patience=10,
-                    monitor='val_loss',
-                    restore_best_weights=True,
-                    verbose=0
-                ),
-                tf.keras.callbacks.ReduceLROnPlateau(
-                    factor=0.5,
-                    patience=5,
-                    monitor='val_loss',
-                    min_lr=1e-6,
-                    verbose=0
-                ),
-                # Add memory monitoring callback
-                tf.keras.callbacks.TensorBoard(
-                    log_dir='logs/fit',
-                    histogram_freq=1,
-                    write_graph=False,  # Disable graph writing to save memory
-                    write_images=False,  # Disable image writing to save memory
-                    update_freq='epoch',
-                    profile_batch=0  # Disable profiling to save memory
+                
+                # Evaluate on test set
+                test_metrics = model.evaluate(
+                    test_generator,
+                    verbose=1,
+                    workers=1,
+                    use_multiprocessing=False
                 )
-            ]
-            
-            # Custom callback for memory monitoring
-            class MemoryMonitorCallback(tf.keras.callbacks.Callback):
-                def on_epoch_begin(self, epoch, logs=None):
-                    if epoch == 0:
-                        logger.info("GPU Memory Usage at start of training:")
-                        for gpu in tf.config.list_physical_devices('GPU'):
-                            logger.info(f"GPU: {gpu.name}")
-                            try:
-                                tf.config.experimental.get_memory_info(gpu.name)
-                            except:
-                                pass
-            
-            callbacks.append(MemoryMonitorCallback())
-            
-            # Train model with distributed strategy
-            logger.info("Starting model training...")
-            history = model.fit(
-                train_generator,
-                validation_data=val_generator,
-                epochs=50,
-                callbacks=callbacks,
-                workers=1,  # Reduced workers
-                use_multiprocessing=False,  # Disable multiprocessing to save memory
-                verbose=1
-            )
-            
-            # Evaluate on test set
-            logger.info("Evaluating model...")
-            test_metrics = model.evaluate(
-                test_generator,
-                verbose=0
-            )
-            metrics = dict(zip(model.metrics_names, test_metrics))
-            
-            # Log final metrics in a single line
-            metrics_str = ", ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
-            logger.info(f"Final metrics - {metrics_str}")
-            
-            # Save model and transformer
-            model.save('artifacts/final_model.h5', save_format='h5')
-            save_object(
-                file_path='artifacts/data_transformer.pkl',
-                obj=self.data_transform
-            )
-            
-            logger.info("Training completed successfully!")
-            return metrics, history
-            
+                
+                logger.info(f"Test metrics: {test_metrics}")
+                
+                return test_metrics, history
+                
         except Exception as e:
-            logger.error("Error in training pipeline")
+            logger.error(f"Error in training pipeline: {str(e)}")
             raise CustomException(e, sys)
 
 if __name__ == "__main__":
