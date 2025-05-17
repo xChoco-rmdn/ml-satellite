@@ -65,10 +65,10 @@ class CloudNowcastingModel:
             # Initial normalization
             x = layers.BatchNormalization()(inputs)
             
-            # Encoder path
+            # Encoder path with reduced filters
             # Level 1
             x1 = layers.ConvLSTM2D(
-                filters=32,
+                filters=16,  # Reduced from 32
                 kernel_size=(3, 3),
                 padding='same',
                 activation='swish',
@@ -76,11 +76,11 @@ class CloudNowcastingModel:
                 return_sequences=True
             )(x)
             x1 = layers.BatchNormalization()(x1)
-            x1 = layers.TimeDistributed(AttentionBlock(32))(x1)
+            x1 = layers.TimeDistributed(AttentionBlock(16))(x1)
             
             # Level 2
             x2 = layers.ConvLSTM2D(
-                filters=64,
+                filters=32,  # Reduced from 64
                 kernel_size=(3, 3),
                 padding='same',
                 activation='swish',
@@ -88,11 +88,11 @@ class CloudNowcastingModel:
                 return_sequences=True
             )(x1)
             x2 = layers.BatchNormalization()(x2)
-            x2 = layers.TimeDistributed(AttentionBlock(64))(x2)
+            x2 = layers.TimeDistributed(AttentionBlock(32))(x2)
             
             # Level 3
             x3 = layers.ConvLSTM2D(
-                filters=128,
+                filters=64,  # Reduced from 128
                 kernel_size=(3, 3),
                 padding='same',
                 activation='swish',
@@ -100,12 +100,12 @@ class CloudNowcastingModel:
                 return_sequences=True
             )(x2)
             x3 = layers.BatchNormalization()(x3)
-            x3 = layers.TimeDistributed(AttentionBlock(128))(x3)
+            x3 = layers.TimeDistributed(AttentionBlock(64))(x3)
             
             # Decoder path with skip connections
             # Level 3 to 2
             x = layers.ConvLSTM2D(
-                filters=64,
+                filters=32,  # Reduced from 64
                 kernel_size=(3, 3),
                 padding='same',
                 activation='swish',
@@ -114,11 +114,11 @@ class CloudNowcastingModel:
             )(x3)
             x = layers.BatchNormalization()(x)
             x = layers.Add()([x, x2])  # Skip connection
-            x = layers.TimeDistributed(AttentionBlock(64))(x)
+            x = layers.TimeDistributed(AttentionBlock(32))(x)
             
             # Level 2 to 1
             x = layers.ConvLSTM2D(
-                filters=32,
+                filters=16,  # Reduced from 32
                 kernel_size=(3, 3),
                 padding='same',
                 activation='swish',
@@ -127,7 +127,7 @@ class CloudNowcastingModel:
             )(x)
             x = layers.BatchNormalization()(x)
             x = layers.Add()([x, x1])  # Skip connection
-            x = layers.TimeDistributed(AttentionBlock(32))(x)
+            x = layers.TimeDistributed(AttentionBlock(16))(x)
             
             # Output layer with improved activation
             outputs = layers.TimeDistributed(

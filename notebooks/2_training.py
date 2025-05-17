@@ -75,10 +75,7 @@ def main():
         os.makedirs('artifacts', exist_ok=True)
         
         # Initialize pipeline with smaller batch size to reduce memory usage
-        trainer = TrainPipeline(batch_size=4)  # Reduced batch size
-        
-        # Setup training strategy with memory optimization
-        strategy = tf.distribute.MirroredStrategy()
+        trainer = TrainPipeline(batch_size=2)  # Reduced batch size
         
         # Load preprocessed data in chunks to reduce memory usage
         logger.info("Loading preprocessed data...")
@@ -100,31 +97,51 @@ def main():
         logger.info(f"X_val: {X_val.shape}, y_val: {y_val.shape}")
         logger.info(f"X_test: {X_test.shape}, y_test: {y_test.shape}")
 
-        # Build and compile model within strategy scope
-        with strategy.scope():
-            logger.info("Building model...")
-            model = trainer.model_trainer.build_model()
-            
-            # Use mixed precision training to reduce memory usage
-            policy = tf.keras.mixed_precision.Policy('mixed_float16')
-            tf.keras.mixed_precision.set_global_policy(policy)
-            
-            # Optimizer with reduced memory footprint
-            optimizer = tf.keras.optimizers.AdamW(
-                learning_rate=1e-6,
-                weight_decay=1e-7,
-                beta_1=0.9,
-                beta_2=0.999,
-                epsilon=1e-7,
-                clipnorm=1.0
-            )
-            
-            model.compile(
-                optimizer=optimizer,
-                loss='mse',
-                metrics=['mae'],
-                jit_compile=True  # Enable XLA compilation for better memory efficiency
-            )
+        # Enable mixed precision training
+        policy = tf.keras.mixed_precision.Policy('mixed_float16')
+        tf.keras.mixed_precision.set_global_policy(policy)
+        
+        # Build and compile model
+        logger.info("Building model...")
+        model = trainer.model_trainer.build_model()
+        
+        # Optimizer with reduced memory footprint
+        optimizer = tf.keras.optimizers.AdamW(
+            learning_rate=1e-6,
+            weight_decay=1e-7,
+            beta_1=0.9,
+            beta_2=0.999,
+            epsilon=1e-7,
+            clipnorm=1.0
+        )
+        
+        # First compile without XLA to warm up
+        logger.info("Warming up model...")
+        model.compile(
+            optimizer=optimizer,
+            loss='mse',
+            metrics=['mae'],
+            jit_compile=False  # Disable XLA for warmup
+        )
+        
+        # Warm up the model with a small batch
+        warmup_batch = X_train[:2]  # Reduced warmup batch size
+        warmup_target = y_train[:2]
+        model.fit(
+            warmup_batch,
+            warmup_target,
+            epochs=1,
+            verbose=0
+        )
+        
+        # Recompile with XLA enabled
+        logger.info("Recompiling model with XLA...")
+        model.compile(
+            optimizer=optimizer,
+            loss='mse',
+            metrics=['mae'],
+            jit_compile=True  # Enable XLA after warmup
+        )
             
         # Simplified callbacks to reduce memory overhead
         callbacks = [
@@ -147,13 +164,16 @@ def main():
             )
         ]
         
+        # Clear GPU memory before training
+        tf.keras.backend.clear_session()
+        
         # Train model with memory-efficient settings
         logger.info("Starting model training...")
         history = model.fit(
             X_train, y_train,
             validation_data=(X_val, y_val),
             epochs=50,
-            batch_size=4,  # Reduced batch size
+            batch_size=2,  # Reduced batch size
             callbacks=callbacks,
             verbose=1
         )
