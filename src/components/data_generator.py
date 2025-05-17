@@ -25,7 +25,7 @@ class SatelliteDataGenerator(tf.keras.utils.Sequence):
             
             # Calculate number of batches
             self.n_batches = int(np.ceil(self.n_samples / self.batch_size))
-            
+        
             # Initialize augmentation parameters
             self.rotation_range = 20
             self.width_shift_range = 0.1

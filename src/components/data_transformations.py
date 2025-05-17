@@ -67,44 +67,53 @@ class DataTransformation:
     def clean_data(self, data):
         """
         Enhanced data cleaning with advanced techniques. Handles 3D, 4D, or 5D arrays.
+        Ensures data has shape (batch, time, height, width, channels).
         """
         try:
-            # If data is 5D (batch, time, height, width, channel)
-            if data.ndim == 5:
-                for b in range(data.shape[0]):
-                    for c in range(data.shape[-1]):
-                        data[b, :, :, :, c] = self.clean_data(data[b, :, :, :, c])
+            if data.ndim == 3:
+                # (time, height, width): do actual cleaning
+                data = np.where(data < 0, np.nan, data)
+                for i in range(data.shape[1]):
+                    for j in range(data.shape[2]):
+                        pixel_timeline = data[:, i, j]
+                        mask = np.isnan(pixel_timeline)
+                        if np.any(mask) and not np.all(mask):
+                            valid_indices = np.where(~mask)[0]
+                            valid_values = pixel_timeline[valid_indices]
+                            interp_values = np.interp(
+                                np.where(mask)[0],
+                                valid_indices,
+                                valid_values,
+                                left=valid_values[0],
+                                right=valid_values[-1]
+                            )
+                            data[mask, i, j] = interp_values
+                # Temporal smoothing
+                data = ndimage.gaussian_filter1d(data, sigma=1, axis=0)
+                # Remove outliers using z-score
+                z_scores = np.abs((data - np.mean(data)) / np.std(data))
+                data = np.where(z_scores > 3, np.nan, data)
+                # Final interpolation for any remaining NaN values
+                data = self._interpolate_remaining_nans(data)
                 return data
-            # If data is 4D (batch, time, height, width)
-            if data.ndim == 4:
+            elif data.ndim == 4:
+                # (batch, time, height, width) or (time, height, width, channel)
+                if data.shape[0] < 10:  # likely (time, height, width, channel)
+                    # Iterate over channel
+                    cleaned = [self.clean_data(data[..., c]) for c in range(data.shape[-1])]
+                    return np.stack(cleaned, axis=-1)
+                else:  # likely (batch, time, height, width)
+                    cleaned = [self.clean_data(data[b]) for b in range(data.shape[0])]
+                    return np.stack(cleaned, axis=0)
+            elif data.ndim == 5:
+                # (batch, time, height, width, channel)
+                cleaned = []
                 for b in range(data.shape[0]):
-                    data[b] = self.clean_data(data[b])
-                return data
-            # Now data is 3D (time, height, width)
-            data = np.where(data < 0, np.nan, data)
-            for i in range(data.shape[1]):
-                for j in range(data.shape[2]):
-                    pixel_timeline = data[:, i, j]
-                    mask = np.isnan(pixel_timeline)
-                    if np.any(mask) and not np.all(mask):
-                        valid_indices = np.where(~mask)[0]
-                        valid_values = pixel_timeline[valid_indices]
-                        interp_values = np.interp(
-                            np.where(mask)[0],
-                            valid_indices,
-                            valid_values,
-                            left=valid_values[0],
-                            right=valid_values[-1]
-                        )
-                        data[mask, i, j] = interp_values
-            # Temporal smoothing
-            data = ndimage.gaussian_filter1d(data, sigma=1, axis=0)
-            # Remove outliers using z-score
-            z_scores = np.abs((data - np.mean(data)) / np.std(data))
-            data = np.where(z_scores > 3, np.nan, data)
-            # Final interpolation for any remaining NaN values
-            data = self._interpolate_remaining_nans(data)
-            return data
+                    cleaned_channels = [self.clean_data(data[b, :, :, :, c]) for c in range(data.shape[-1])]
+                    cleaned.append(np.stack(cleaned_channels, axis=-1))
+                return np.stack(cleaned, axis=0)
+            else:
+                raise CustomException(f"Unexpected data shape in clean_data: {data.shape}", sys)
         except Exception as e:
             logger.error("Error in cleaning data")
             raise CustomException(e, sys)
@@ -129,29 +138,36 @@ class DataTransformation:
                 if not np.any(mask):
                     continue
                 
-                # Check if frame has any variation
-                frame_range = frame.max() - frame.min()
-                if frame_range == 0:
-                    # If all values are the same, use that value for inpainting
+                # Check if frame has any variation and handle edge cases
+                frame_min = np.nanmin(frame)
+                frame_max = np.nanmax(frame)
+                frame_range = frame_max - frame_min
+                
+                # Handle edge cases more robustly
+                if frame_range == 0 or np.isnan(frame_range) or frame_range < 1e-10:
+                    # If all values are the same or invalid, use a default value
                     frame_uint8 = np.full_like(frame, 128, dtype=np.uint8)
                 else:
-                    # Normalize to [0, 255] range
-                    frame_uint8 = ((frame - frame.min()) * (255.0 / frame_range)).astype(np.uint8)
+                    # Normalize to [0, 255] range with safety checks
+                    frame_normalized = np.clip((frame - frame_min) * (255.0 / frame_range), 0, 255)
+                    frame_uint8 = frame_normalized.astype(np.uint8)
                 
                 mask_uint8 = mask.astype(np.uint8)
                 
                 # Apply inpainting
                 filled_frame = cv2.inpaint(frame_uint8, mask_uint8, 3, cv2.INPAINT_TELEA)
                 
-                # Convert back to original scale
-                if frame_range == 0:
-                    filled_frame = np.full_like(filled_frame, frame[0, 0], dtype=float)
+                # Convert back to original scale with safety checks
+                if frame_range == 0 or np.isnan(frame_range) or frame_range < 1e-10:
+                    filled_frame = np.full_like(filled_frame, frame_min if not np.isnan(frame_min) else 0, dtype=float)
                 else:
-                    filled_frame = (filled_frame.astype(float) * frame_range / 255.0) + frame.min()
+                    filled_frame = (filled_frame.astype(float) * frame_range / 255.0) + frame_min
                 
-                # Update the data
+                # Update the data with safety check
                 data[t] = np.where(mask, filled_frame, frame)
             
+            # Final check for any remaining NaN values
+            data = np.nan_to_num(data, nan=0.0)
             return data
             
         except Exception as e:
@@ -165,17 +181,22 @@ class DataTransformation:
             data = np.nan_to_num(data, nan=0.0)
             
             # Calculate global statistics for more stable normalization
-            mean = np.mean(data)
-            std = np.std(data)
+            # Use nanmean and nanstd to handle any remaining NaN values
+            mean = np.nanmean(data)
+            std = np.nanstd(data)
             
-            # Avoid division by zero
+            # Avoid division by zero and handle extreme cases
             std = np.where(std == 0, 1.0, std)
+            std = np.clip(std, 1e-6, None)  # Ensure std is not too small
             
             # Normalize
             normalized_data = (data - mean) / std
             
             # Clip extreme values to prevent numerical instability
             normalized_data = np.clip(normalized_data, -10, 10)
+            
+            # Final check for any remaining NaN or inf values
+            normalized_data = np.nan_to_num(normalized_data, nan=0.0, posinf=10.0, neginf=-10.0)
             
             return normalized_data
         except Exception as e:

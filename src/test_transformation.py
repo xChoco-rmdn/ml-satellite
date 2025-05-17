@@ -16,11 +16,13 @@ def test_transformation():
         # Initialize transformation
         transform = DataTransformation()
         
-        # Transform data
-        logger.info("Starting data transformation...")
-        (X_train, y_train), (X_test, y_test) = transform.initiate_data_transformation(
-            train_data, test_data
-        )
+        # Transform training data
+        logger.info("Starting data transformation for training data...")
+        X_train, y_train, _, _ = transform.initiate_data_transformation(train_data)
+        
+        # Transform test data
+        logger.info("Starting data transformation for test data...")
+        X_test, y_test, _, _ = transform.initiate_data_transformation(test_data)
         
         # Print results
         logger.info("\nTransformation Results:")

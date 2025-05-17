@@ -156,10 +156,13 @@ class CloudNowcastingModel:
                 # Add epsilon to prevent division by zero
                 epsilon = 1e-6
                 
-                # MSE loss (30%)
+                # Clip predictions to valid range
+                y_pred = tf.clip_by_value(y_pred, 0.0, 1.0)
+                
+                # MSE loss (40%)
                 mse = tf.reduce_mean(tf.square(y_true - y_pred))
                 
-                # MAE loss (20%)
+                # MAE loss (30%)
                 mae = tf.reduce_mean(tf.abs(y_true - y_pred))
                 
                 # SSIM loss (20%) with safeguards
@@ -167,31 +170,17 @@ class CloudNowcastingModel:
                 ssim = tf.reduce_mean(ssim)
                 ssim_loss = 1.0 - tf.clip_by_value(ssim, 0.0, 1.0)
                 
-                # MS-SSIM loss (10%) with safeguards
-                ms_ssim = tf.image.ssim_multiscale(y_true, y_pred, max_val=1.0)
-                ms_ssim = tf.reduce_mean(ms_ssim)
-                ms_ssim_loss = 1.0 - tf.clip_by_value(ms_ssim, 0.0, 1.0)
-                
                 # Temporal consistency loss (10%)
                 true_grad = y_true[:, 1:] - y_true[:, :-1]
                 pred_grad = y_pred[:, 1:] - y_pred[:, :-1]
                 temporal = tf.reduce_mean(tf.abs(true_grad - pred_grad))
                 
-                # Gradient loss (10%)
-                true_grad_x = y_true[:, :, 1:] - y_true[:, :, :-1]
-                true_grad_y = y_true[:, 1:, :] - y_true[:, :-1, :]
-                pred_grad_x = y_pred[:, :, 1:] - y_pred[:, :, :-1]
-                pred_grad_y = y_pred[:, 1:, :] - y_pred[:, :-1, :]
-                gradient = tf.reduce_mean(tf.abs(true_grad_x - pred_grad_x) + tf.abs(true_grad_y - pred_grad_y))
-                
                 # Combine losses with weights and add epsilon to prevent NaN
                 total_loss = (
-                    0.3 * mse +
-                    0.2 * mae +
+                    0.4 * mse +
+                    0.3 * mae +
                     0.2 * ssim_loss +
-                    0.1 * ms_ssim_loss +
-                    0.1 * temporal +
-                    0.1 * gradient
+                    0.1 * temporal
                 ) + epsilon
                 
                 # Final safeguard against NaN

@@ -69,6 +69,26 @@ def center_crop(data, target_height=256, target_width=256):
         cropped.append(frame[start_h:start_h+target_height, start_w:start_w+target_width])
     return np.stack(cropped)
 
+def process_data_in_batches(data, data_transformation, batch_size=10):
+    """Process data in smaller batches to prevent memory issues"""
+    n_samples = len(data)
+    processed_batches = []
+    
+    for i in range(0, n_samples, batch_size):
+        end_idx = min(i + batch_size, n_samples)
+        batch = data[i:end_idx]
+        logger.info(f"Processing batch {i//batch_size + 1} of {(n_samples + batch_size - 1)//batch_size}")
+        try:
+            # Clean and normalize batch
+            cleaned_batch = data_transformation.clean_data(batch)
+            normalized_batch = data_transformation.normalize_data(cleaned_batch)
+            processed_batches.append(normalized_batch)
+        except Exception as e:
+            logger.error(f"Error processing batch {i//batch_size + 1}: {e}")
+            continue
+    
+    return np.concatenate(processed_batches, axis=0)
+
 def main():
     try:
         logger.info("Starting preprocessing pipeline")
@@ -95,13 +115,10 @@ def main():
         logger.info(f"Loaded training data shape: {train_data.shape}")
         logger.info(f"Loaded test data shape: {test_data.shape}")
 
-        # Clean and normalize data
-        logger.info("Cleaning and normalizing data...")
-        train_data = data_transformation.clean_data(train_data)
-        test_data = data_transformation.clean_data(test_data)
-        
-        train_data = data_transformation.normalize_data(train_data)
-        test_data = data_transformation.normalize_data(test_data)
+        # Process data in batches
+        logger.info("Processing data in batches...")
+        train_data = process_data_in_batches(train_data, data_transformation)
+        test_data = process_data_in_batches(test_data, data_transformation)
 
         # Crop data
         logger.info("Cropping data...")
