@@ -56,34 +56,44 @@ class TrainPipeline:
         try:
             # Get all available GPUs
             gpus = tf.config.list_physical_devices('GPU')
+            logger.info(f"Found {len(gpus)} GPU(s): {[gpu.name for gpu in gpus]}")
             
             if len(gpus) > 1:
-                # Use MirroredStrategy for multi-GPU training
-                strategy = tf.distribute.MirroredStrategy()
-                logger.info(f"Using MirroredStrategy with {len(gpus)} GPUs")
+                # Use MirroredStrategy for multi-GPU training with explicit devices
+                strategy = tf.distribute.MirroredStrategy(
+                    devices=[f"/GPU:{i}" for i in range(len(gpus))],
+                    cross_device_ops=tf.distribute.NcclAllReduce()  # Use NCCL for better GPU communication
+                )
+                logger.info(f"Using MirroredStrategy with {len(gpus)} GPUs: {[gpu.name for gpu in gpus]}")
+                
+                # Set batch size per GPU
+                self.batch_size = self.batch_size * len(gpus)
+                logger.info(f"Total batch size across {len(gpus)} GPUs: {self.batch_size}")
             elif len(gpus) == 1:
                 # Use OneDeviceStrategy for single GPU
                 strategy = tf.distribute.OneDeviceStrategy(f"/GPU:0")
-                logger.info("Using single GPU")
+                logger.info(f"Using single GPU: {gpus[0].name}")
             else:
                 # Use default strategy for CPU
                 strategy = tf.distribute.get_strategy()
-                logger.info("Using CPU")
+                logger.info("No GPUs found, using CPU")
             
             # Configure strategy
             with strategy.scope():
                 # Enable mixed precision
                 tf.keras.mixed_precision.set_global_policy('mixed_float16')
                 
-                # Configure memory growth
+                # Configure memory growth for all GPUs
                 if gpus:
                     for gpu in gpus:
                         tf.config.experimental.set_memory_growth(gpu, True)
+                        # Set visible devices explicitly
+                        tf.config.set_visible_devices(gpu, 'GPU')
             
             return strategy
             
         except Exception as e:
-            logger.error("Error setting up training strategy")
+            logger.error(f"Error setting up training strategy: {str(e)}")
             raise CustomException(e, sys)
     
     def validate_data(self, X_train, y_train, X_val, y_val, X_test, y_test):
@@ -115,6 +125,9 @@ class TrainPipeline:
         try:
             logger.info("Starting training pipeline")
             
+            # Setup training strategy first
+            strategy = self.setup_training_strategy()
+            
             # Load training and test data
             train_data = np.load("data/train/train_data_20250401_0000_to_20250425_0100.npy")
             test_data = np.load("data/test/test_data_20250425_0110_to_20250501_0000.npy")
@@ -139,31 +152,29 @@ class TrainPipeline:
             # Log data shapes once
             logger.info(f"Data shapes - Train: {X_train.shape}, Val: {X_val.shape}, Test: {X_test.shape}")
             
-            # Setup training strategy
-            strategy = self.setup_training_strategy()
-            
-            # Create optimized data generators
-            train_generator = SatelliteDataGenerator(
-                X_train, y_train,
-                batch_size=self.batch_size,
-                prefetch_factor=1,
-                augment=True
-            )
-            val_generator = SatelliteDataGenerator(
-                X_val, y_val,
-                batch_size=self.batch_size,
-                prefetch_factor=1,
-                augment=False
-            )
-            test_generator = SatelliteDataGenerator(
-                X_test, y_test,
-                batch_size=self.batch_size,
-                prefetch_factor=1,
-                augment=False
-            )
-            
-            # Build and compile model within strategy scope
+            # Create distributed datasets
             with strategy.scope():
+                # Create optimized data generators with distributed strategy
+                train_generator = SatelliteDataGenerator(
+                    X_train, y_train,
+                    batch_size=self.batch_size // strategy.num_replicas_in_sync,  # Divide batch size by number of GPUs
+                    prefetch_factor=2,
+                    augment=True
+                )
+                val_generator = SatelliteDataGenerator(
+                    X_val, y_val,
+                    batch_size=self.batch_size // strategy.num_replicas_in_sync,
+                    prefetch_factor=2,
+                    augment=False
+                )
+                test_generator = SatelliteDataGenerator(
+                    X_test, y_test,
+                    batch_size=self.batch_size // strategy.num_replicas_in_sync,
+                    prefetch_factor=2,
+                    augment=False
+                )
+                
+                # Build and compile model within strategy scope
                 model = self.model_trainer.build_model()
                 
                 optimizer = tf.keras.optimizers.AdamW(
