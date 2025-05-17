@@ -8,6 +8,7 @@ from src.logger import logger
 from src.exception import CustomException
 from src.utils import save_object, evaluate_model
 import tensorflow as tf
+import logging
 
 class TrainPipeline:
     def __init__(self, batch_size=2):
@@ -15,14 +16,23 @@ class TrainPipeline:
         self.model_trainer = CloudNowcastingModel()
         self.batch_size = batch_size
         
-        # Completely disable TensorFlow logging
+        # Set environment variables to suppress TensorFlow logging
         os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # FATAL only
+        os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+        os.environ['TF_ENABLE_AUTO_MIXED_PRECISION'] = '0'
+        
+        # Configure TensorFlow logging
         tf.get_logger().setLevel('ERROR')
         tf.autograph.set_verbosity(0)
         
         # Disable TensorFlow debug logs
         tf.debugging.disable_traceback_filtering()
         tf.debugging.disable_check_numerics()
+        
+        # Configure Python logging
+        logging.getLogger('tensorflow').setLevel(logging.ERROR)
+        logging.getLogger('tensorflow.python').setLevel(logging.ERROR)
+        logging.getLogger('tensorflow.python.ops').setLevel(logging.ERROR)
         
         # Enable mixed precision training
         self.policy = tf.keras.mixed_precision.Policy('mixed_float16')
@@ -233,7 +243,7 @@ class TrainPipeline:
             logger.info(f"Final metrics - {metrics_str}")
             
             # Save model and transformer
-            model.save('artifacts/final_model.h5')
+            model.save('artifacts/final_model.h5', save_format='h5')
             save_object(
                 file_path='artifacts/data_transformer.pkl',
                 obj=self.data_transform
