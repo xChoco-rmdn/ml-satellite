@@ -175,34 +175,29 @@ class DataTransformation:
             raise CustomException(e, sys)
     
     def normalize_data(self, data):
-        """Normalize data using per-pixel z-score normalization."""
+        """Normalize data using per-pixel z-score normalization with improved numerical stability."""
         try:
             # Replace NaN values with 0 before normalization
             data = np.nan_to_num(data, nan=0.0)
             
-            # Calculate per-pixel statistics
-            # For data shape (time, height, width) or (batch, time, height, width)
+            # Calculate per-pixel statistics with improved numerical stability
             if len(data.shape) == 3:
-                # Calculate mean and std along time axis for each pixel
                 mean = np.mean(data, axis=0, keepdims=True)
                 std = np.std(data, axis=0, keepdims=True)
             else:  # (batch, time, height, width)
-                # Calculate mean and std along time axis for each pixel in each batch
                 mean = np.mean(data, axis=1, keepdims=True)
                 std = np.std(data, axis=1, keepdims=True)
             
-            # Avoid division by zero and handle extreme cases
-            std = np.where(std == 0, 1.0, std)
-            std = np.clip(std, 1e-6, None)  # Ensure std is not too small
+            # Add epsilon to prevent division by zero and ensure minimum std
+            epsilon = 1e-8
+            std = np.maximum(std, epsilon)
             
-            # Normalize
+            # Normalize with clipping to prevent extreme values
             normalized_data = (data - mean) / std
-            
-            # Clip extreme values to prevent numerical instability
-            normalized_data = np.clip(normalized_data, -10, 10)
+            normalized_data = np.clip(normalized_data, -3, 3)  # Clip to 3 standard deviations
             
             # Final check for any remaining NaN or inf values
-            normalized_data = np.nan_to_num(normalized_data, nan=0.0, posinf=10.0, neginf=-10.0)
+            normalized_data = np.nan_to_num(normalized_data, nan=0.0, posinf=3.0, neginf=-3.0)
             
             logger.info(f"Per-pixel normalization completed. Data range: [{normalized_data.min():.2f}, {normalized_data.max():.2f}]")
             return normalized_data

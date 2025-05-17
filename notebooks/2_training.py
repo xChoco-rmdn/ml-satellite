@@ -65,8 +65,8 @@ def main():
         logger.info("Starting training pipeline")
         os.makedirs('artifacts', exist_ok=True)
         
-        # Initialize pipeline with smaller batch size
-        trainer = TrainPipeline(batch_size=2)
+        # Initialize pipeline with larger batch size for stability
+        trainer = TrainPipeline(batch_size=8)  # Increased batch size
         
         # Setup training strategy first
         strategy = trainer.setup_training_strategy()
@@ -100,13 +100,14 @@ def main():
             logger.info("Building model...")
             model = trainer.model_trainer.build_model()
             
-            # Use mixed precision optimizer with reduced learning rate
+            # Use mixed precision optimizer with gradient clipping
             optimizer = tf.keras.optimizers.AdamW(
-                learning_rate=1e-5,  # Reduced learning rate
-                weight_decay=1e-6,   # Reduced weight decay
+                learning_rate=1e-6,  # Further reduced learning rate
+                weight_decay=1e-7,   # Reduced weight decay
                 beta_1=0.9,
                 beta_2=0.999,
-                epsilon=1e-7
+                epsilon=1e-7,
+                clipnorm=1.0  # Add gradient clipping
             )
             optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
             
@@ -125,16 +126,16 @@ def main():
                 mode='min'
             ),
             tf.keras.callbacks.EarlyStopping(
-                patience=15,  # Increased patience
+                patience=20,  # Increased patience
                 monitor='val_loss',
                 restore_best_weights=True,
                 min_delta=1e-4
             ),
             tf.keras.callbacks.ReduceLROnPlateau(
-                factor=0.5,
-                patience=8,  # Increased patience
+                factor=0.2,  # More aggressive reduction
+                patience=10,  # Increased patience
                 monitor='val_loss',
-                min_lr=1e-7
+                min_lr=1e-8
             ),
             tf.keras.callbacks.TensorBoard(
                 log_dir='logs/fit',
@@ -149,7 +150,7 @@ def main():
             X_train, y_train,
             validation_data=(X_val, y_val),
             epochs=50,
-            batch_size=2,  # Reduced batch size
+            batch_size=8,  # Increased batch size
             callbacks=callbacks,
             verbose=1
         )
