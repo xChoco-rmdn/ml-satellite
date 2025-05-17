@@ -65,20 +65,22 @@ def main():
         logger.info("Starting training pipeline")
         os.makedirs('artifacts', exist_ok=True)
         
-        # Initialize pipeline
-        trainer = TrainPipeline(batch_size=4)
+        # Initialize pipeline with smaller batch size
+        trainer = TrainPipeline(batch_size=2)
         
         # Setup training strategy first
         strategy = trainer.setup_training_strategy()
         
-        # Load preprocessed data directly
-        logger.info("Loading preprocessed data from data/processed/ ...")
+        # Load preprocessed data
+        logger.info("Loading preprocessed data...")
         X_train = np.load('data/processed/X_train.npy')
         y_train = np.load('data/processed/y_train.npy')
         X_test = np.load('data/processed/X_test.npy')
         y_test = np.load('data/processed/y_test.npy')
-        logger.info(f"Loaded X_train: {X_train.shape}, y_train: {y_train.shape}")
-        logger.info(f"Loaded X_test: {X_test.shape}, y_test: {y_test.shape}")
+        
+        logger.info(f"Loaded data shapes:")
+        logger.info(f"X_train: {X_train.shape}, y_train: {y_train.shape}")
+        logger.info(f"X_test: {X_test.shape}, y_test: {y_test.shape}")
 
         # Create validation split from training data
         val_split = 0.1
@@ -87,67 +89,95 @@ def main():
         y_val = y_train[-val_size:]
         X_train = X_train[:-val_size]
         y_train = y_train[:-val_size]
-        logger.info(f"Split: X_train: {X_train.shape}, y_train: {y_train.shape}, X_val: {X_val.shape}, y_val: {y_val.shape}")
+        
+        logger.info(f"Split data shapes:")
+        logger.info(f"X_train: {X_train.shape}, y_train: {y_train.shape}")
+        logger.info(f"X_val: {X_val.shape}, y_val: {y_val.shape}")
+        logger.info(f"X_test: {X_test.shape}, y_test: {y_test.shape}")
 
         # Build and compile model within strategy scope
         with strategy.scope():
+            logger.info("Building model...")
             model = trainer.model_trainer.build_model()
-            model.compile(optimizer='adam', loss='mse', metrics=['mae'])
             
-        # Callbacks
+            # Use mixed precision optimizer with reduced learning rate
+            optimizer = tf.keras.optimizers.AdamW(
+                learning_rate=1e-5,  # Reduced learning rate
+                weight_decay=1e-6,   # Reduced weight decay
+                beta_1=0.9,
+                beta_2=0.999,
+                epsilon=1e-7
+            )
+            optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
+            
+            model.compile(
+                optimizer=optimizer,
+                loss='mse',
+                metrics=['mae']
+            )
+            
+        # Callbacks with adjusted parameters
         callbacks = [
             tf.keras.callbacks.ModelCheckpoint(
                 'artifacts/best_model.h5',
                 save_best_only=True,
-                monitor='val_loss'
+                monitor='val_loss',
+                mode='min'
             ),
             tf.keras.callbacks.EarlyStopping(
-                patience=10,
+                patience=15,  # Increased patience
                 monitor='val_loss',
-                restore_best_weights=True
+                restore_best_weights=True,
+                min_delta=1e-4
             ),
             tf.keras.callbacks.ReduceLROnPlateau(
                 factor=0.5,
-                patience=5,
+                patience=8,  # Increased patience
                 monitor='val_loss',
-                min_lr=1e-6
+                min_lr=1e-7
             ),
             tf.keras.callbacks.TensorBoard(
                 log_dir='logs/fit',
                 histogram_freq=1,
-                update_freq='epoch',
-                profile_batch='100,120'
+                update_freq='epoch'
             )
         ]
         
-        logger.info("Training model...")
+        # Train model with adjusted parameters
+        logger.info("Starting model training...")
         history = model.fit(
             X_train, y_train,
             validation_data=(X_val, y_val),
             epochs=50,
-            batch_size=4,
-            callbacks=callbacks
+            batch_size=2,  # Reduced batch size
+            callbacks=callbacks,
+            verbose=1
         )
         
+        # Evaluate on test set
         logger.info("Evaluating model on test set...")
         test_metrics = model.evaluate(X_test, y_test, verbose=1)
         metrics = dict(zip(model.metrics_names, test_metrics))
+        
         logger.info("Test Set Metrics:")
         for metric_name, value in metrics.items():
             logger.info(f"{metric_name}: {value:.4f}")
             
+        # Save final model
         logger.info("Saving final model...")
         model.save('artifacts/final_model.h5')
-        logger.info("Training pipeline completed successfully!")
         
+        # Plot and save training history
         plot_training_history(
             history,
             os.path.join('artifacts', f'training_history_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png')
         )
+        
+        logger.info("Training pipeline completed successfully!")
         return metrics, history
         
     except Exception as e:
-        logger.error("Error in training pipeline")
+        logger.error(f"Error in training pipeline: {str(e)}")
         raise CustomException(e, sys)
 
 if __name__ == "__main__":
