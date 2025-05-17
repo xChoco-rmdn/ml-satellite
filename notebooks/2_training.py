@@ -62,6 +62,10 @@ def plot_training_history(history, save_path):
 
 def main():
     try:
+        # Enable TensorFlow debugging tools
+        tf.debugging.enable_check_numerics()
+        tf.debugging.set_log_device_placement(True)
+        
         logger.info("Starting training pipeline")
         os.makedirs('artifacts', exist_ok=True)
         
@@ -77,6 +81,34 @@ def main():
         y_train = np.load('data/processed/y_train.npy')
         X_test = np.load('data/processed/X_test.npy')
         y_test = np.load('data/processed/y_test.npy')
+        
+        # Add data validation checks
+        logger.info("Validating input data...")
+        # Convert to TensorFlow tensors for statistics
+        X_train_tf = tf.convert_to_tensor(X_train, dtype=tf.float32)
+        y_train_tf = tf.convert_to_tensor(y_train, dtype=tf.float32)
+        
+        # Calculate statistics using TensorFlow operations
+        tf.print("X_train stats - mean:", tf.reduce_mean(X_train_tf))
+        tf.print("X_train stats - std:", tf.math.reduce_std(X_train_tf))
+        tf.print("y_train stats - mean:", tf.reduce_mean(y_train_tf))
+        tf.print("y_train stats - std:", tf.math.reduce_std(y_train_tf))
+        
+        # Check for NaN values
+        assert not np.isnan(X_train).any(), "NaN values found in X_train"
+        assert not np.isnan(y_train).any(), "NaN values found in y_train"
+        assert not np.isnan(X_test).any(), "NaN values found in X_test"
+        assert not np.isnan(y_test).any(), "NaN values found in y_test"
+        
+        # Check for infinite values
+        assert not np.isinf(X_train).any(), "Infinite values found in X_train"
+        assert not np.isinf(y_train).any(), "Infinite values found in y_train"
+        assert not np.isinf(X_test).any(), "Infinite values found in X_test"
+        assert not np.isinf(y_test).any(), "Infinite values found in y_test"
+        
+        # Check value ranges
+        assert X_train.min() >= -3 and X_train.max() <= 3, "X_train values outside [-3, 3] range"
+        assert y_train.min() >= -3 and y_train.max() <= 3, "y_train values outside [-3, 3] range"
         
         logger.info(f"Loaded data shapes:")
         logger.info(f"X_train: {X_train.shape}, y_train: {y_train.shape}")
@@ -141,6 +173,12 @@ def main():
                 log_dir='logs/fit',
                 histogram_freq=1,
                 update_freq='epoch'
+            ),
+            # Add custom callback for NaN detection
+            tf.keras.callbacks.LambdaCallback(
+                on_batch_end=lambda batch, logs: tf.debugging.assert_all_finite(
+                    logs['loss'], f"NaN loss detected at batch {batch}"
+                )
             )
         ]
         
